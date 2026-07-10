@@ -37,6 +37,7 @@
     "cloudDisclosure": "文件将上传至百度云端识别。",
     "supportedFiles": "支持的文件",
     "submitFailed": "无法添加文件。",
+    "postCreateRefreshFailed": "任务已创建，但列表刷新失败。请前往任务队列查看。",
     "dropRegistrationFailed": "无法监听文件拖放。",
     "selectService": "选择服务",
     "serviceHelp": "按任务类型选择官方云端模型",

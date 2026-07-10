@@ -129,6 +129,25 @@ test("does not resubscribe on an ordinary rerender and still cleans up", async (
   expect(unlisten).toHaveBeenCalledOnce();
 });
 
+test("keeps one drop listener while delivering paths to the latest callback", async () => {
+  let handler: ((event: unknown) => void) | undefined;
+  onDragDropEventMock.mockImplementation(async (nextHandler) => {
+    handler = nextHandler;
+    return vi.fn();
+  });
+  const firstOnPaths = vi.fn();
+  const latestOnPaths = vi.fn();
+  const { rerender } = render(<DropZone onPaths={firstOnPaths} />);
+  await waitFor(() => expect(handler).toBeDefined());
+
+  rerender(<DropZone onPaths={latestOnPaths} />);
+  handler!({ payload: { type: "drop", paths: ["C:/docs/latest.png"] } });
+
+  expect(onDragDropEventMock).toHaveBeenCalledOnce();
+  expect(firstOnPaths).not.toHaveBeenCalled();
+  expect(latestOnPaths).toHaveBeenCalledWith(["C:/docs/latest.png"]);
+});
+
 test("retries drop registration without hiding an independent submit error", async () => {
   let dropHandler: ((event: unknown) => void) | undefined;
   const unlisten = vi.fn();

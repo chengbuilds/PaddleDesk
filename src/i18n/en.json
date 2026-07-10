@@ -37,6 +37,7 @@
     "cloudDisclosure": "Files are uploaded to Baidu Cloud for recognition.",
     "supportedFiles": "Supported files",
     "submitFailed": "Files could not be added.",
+    "postCreateRefreshFailed": "Tasks were created, but the list could not be refreshed. Check the Task Queue.",
     "dropRegistrationFailed": "File drops could not be monitored.",
     "selectService": "Choose a service",
     "serviceHelp": "Select an official cloud model for the task",

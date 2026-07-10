@@ -16,11 +16,12 @@ export function Home() {
   const setSelectedTaskId = useApp((state) => state.setSelectedTaskId);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [postCreateRefreshFailed, setPostCreateRefreshFailed] = useState(false);
 
   const refresh = useCallback(async () => {
-    const baseRevision = useApp.getState().taskRevision;
+    const snapshot = useApp.getState().beginTaskSnapshot();
     const rows = await listTasks(null);
-    mergeTasks(rows, baseRevision);
+    mergeTasks(rows, snapshot);
   }, [mergeTasks]);
 
   useEffect(() => {
@@ -46,8 +47,13 @@ export function Home() {
 
   const submit = useCallback(
     async (paths: string[]) => {
+      setPostCreateRefreshFailed(false);
       await createTasks(paths, service);
-      await refresh();
+      try {
+        await refresh();
+      } catch {
+        setPostCreateRefreshFailed(true);
+      }
     },
     [refresh, service],
   );
@@ -74,6 +80,9 @@ export function Home() {
       </div>
       {loading ? <p>{t("common.loading")}</p> : null}
       {loadFailed ? <p role="alert">{t("home.loadFailed")}</p> : null}
+      {postCreateRefreshFailed ? (
+        <p role="alert">{t("home.postCreateRefreshFailed")}</p>
+      ) : null}
       {!loading && !loadFailed && recent.length === 0 ? (
         <p className="empty-state">{t("home.empty")}</p>
       ) : null}

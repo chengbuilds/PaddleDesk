@@ -26,6 +26,11 @@ export interface TaskSummary {
 type TaskField = Exclude<keyof TaskSummary, "id">;
 type TaskFieldRevisions = Partial<Record<TaskField, number>>;
 
+export interface TaskSnapshot {
+  baseRevision: number;
+  requestId: number;
+}
+
 export interface AppState {
   view: View;
   setView: (view: View) => void;
@@ -35,13 +40,16 @@ export interface AppState {
   taskRevision: number;
   taskRevisions: Record<string, number>;
   taskFieldRevisions: Record<string, TaskFieldRevisions>;
+  taskSnapshotRequest: number;
+  taskSnapshotApplied: number;
+  beginTaskSnapshot: () => TaskSnapshot;
   upsertTask: (task: TaskSummary) => void;
-  mergeTasks: (tasks: TaskSummary[], baseRevision: number) => void;
+  mergeTasks: (tasks: TaskSummary[], snapshot: TaskSnapshot) => void;
   selectedTaskId: string | null;
   setSelectedTaskId: (id: string | null) => void;
 }
 
-export const useApp = create<AppState>((set) => ({
+export const useApp = create<AppState>((set, get) => ({
   view: "home",
   setView: (view) => set({ view }),
   service: "vl16",
@@ -50,6 +58,17 @@ export const useApp = create<AppState>((set) => ({
   taskRevision: 0,
   taskRevisions: {},
   taskFieldRevisions: {},
+  taskSnapshotRequest: 0,
+  taskSnapshotApplied: 0,
+  beginTaskSnapshot: () => {
+    const state = get();
+    const snapshot = {
+      baseRevision: state.taskRevision,
+      requestId: state.taskSnapshotRequest + 1,
+    };
+    set({ taskSnapshotRequest: snapshot.requestId });
+    return snapshot;
+  },
   upsertTask: (task) =>
     set((state) => {
       const revision = state.taskRevision + 1;
@@ -86,8 +105,10 @@ export const useApp = create<AppState>((set) => ({
         },
       };
     }),
-  mergeTasks: (incoming, baseRevision) =>
+  mergeTasks: (incoming, snapshot) =>
     set((state) => {
+      if (snapshot.requestId < state.taskSnapshotApplied) return state;
+
       const current = new Map(state.tasks.map((task) => [task.id, task]));
       const tasks = incoming.map((task) => {
         const merged = { ...task };
@@ -96,7 +117,7 @@ export const useApp = create<AppState>((set) => ({
 
         if (currentTask && revisions) {
           for (const field of Object.keys(revisions) as TaskField[]) {
-            if ((revisions[field] ?? 0) > baseRevision) {
+            if ((revisions[field] ?? 0) > snapshot.baseRevision) {
               Object.assign(merged, { [field]: currentTask[field] });
             }
           }
@@ -111,9 +132,10 @@ export const useApp = create<AppState>((set) => ({
           ...state.tasks.filter(
             ({ id }) =>
               !incomingIds.has(id) &&
-              (state.taskRevisions[id] ?? 0) > baseRevision,
+              (state.taskRevisions[id] ?? 0) > snapshot.baseRevision,
           ),
         ],
+        taskSnapshotApplied: snapshot.requestId,
       };
     }),
   selectedTaskId: null,

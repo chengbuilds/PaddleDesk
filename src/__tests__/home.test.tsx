@@ -48,6 +48,11 @@ beforeEach(async () => {
     view: "home",
     service: "vl16",
     tasks: [],
+    taskRevision: 0,
+    taskRevisions: {},
+    taskFieldRevisions: {},
+    taskSnapshotRequest: 0,
+    taskSnapshotApplied: 0,
     selectedTaskId: null,
   });
   await initI18n();
@@ -132,4 +137,30 @@ test("refreshes list metadata after creating tasks", async () => {
       input_path: "C:/docs/created.png",
     }),
   );
+});
+
+test("does not report task creation as failed when only the follow-up refresh fails", async () => {
+  let listCalls = 0;
+  invokeMock.mockImplementation(async (command) => {
+    if (command === "list_tasks") {
+      listCalls += 1;
+      if (listCalls === 1) return [];
+      throw new Error("refresh unavailable");
+    }
+    if (command === "create_tasks") return ["created"];
+    throw new Error(`unexpected command: ${command}`);
+  });
+  openMock.mockResolvedValue(["C:/docs/created.png"]);
+  render(<Home />);
+  await screen.findByText("还没有任务。选择或拖入文件即可开始。");
+
+  fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+
+  expect(
+    await screen.findByText("任务已创建，但列表刷新失败。请前往任务队列查看。"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("无法添加文件。")).not.toBeInTheDocument();
+  expect(
+    invokeMock.mock.calls.filter(([command]) => command === "create_tasks"),
+  ).toHaveLength(1);
 });

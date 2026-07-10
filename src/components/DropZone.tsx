@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -16,25 +22,27 @@ export function DropZone({ onPaths }: DropZoneProps) {
   const [registrationError, setRegistrationError] = useState(false);
   const [submitError, setSubmitError] = useState(false);
   const [registrationAttempt, setRegistrationAttempt] = useState(0);
+  const onPathsRef = useRef(onPaths);
 
-  const submit = useCallback(
-    (paths: string[]) => {
-      const supported = filterSupported(paths);
-      if (supported.length === 0) return;
-      let submission: void | Promise<void>;
-      try {
-        submission = onPaths(supported);
-      } catch {
-        setSubmitError(true);
-        return;
-      }
-      void Promise.resolve(submission).then(
-        () => setSubmitError(false),
-        () => setSubmitError(true),
-      );
-    },
-    [onPaths],
-  );
+  useLayoutEffect(() => {
+    onPathsRef.current = onPaths;
+  }, [onPaths]);
+
+  const submit = useCallback((paths: string[]) => {
+    const supported = filterSupported(paths);
+    if (supported.length === 0) return;
+    let submission: void | Promise<void>;
+    try {
+      submission = onPathsRef.current(supported);
+    } catch {
+      setSubmitError(true);
+      return;
+    }
+    void Promise.resolve(submission).then(
+      () => setSubmitError(false),
+      () => setSubmitError(true),
+    );
+  }, []);
 
   useEffect(() => {
     let disposed = false;
