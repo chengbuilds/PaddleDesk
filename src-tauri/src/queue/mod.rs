@@ -240,7 +240,7 @@ impl Queue {
 
     fn spawn_registered(self: &Arc<Self>, task: AdmittedTask) {
         let queue = Arc::clone(self);
-        tokio::spawn(async move { queue.run(task).await });
+        tauri::async_runtime::spawn(async move { queue.run(task).await });
     }
 
     async fn run(self: Arc<Self>, task: AdmittedTask) {

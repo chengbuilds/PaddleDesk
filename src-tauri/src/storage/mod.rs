@@ -108,7 +108,7 @@ impl Store {
             .unwrap_or((None, None));
         let (error_kind, error_msg) = error
             .map(error_fields)
-            .map(|(kind, message)| (Some(kind), Some(message)))
+            .map(|(kind, message)| (Some(kind), message))
             .unwrap_or((None, None));
         self.0.execute(
             "UPDATE tasks SET status = ?1,
@@ -139,7 +139,7 @@ impl Store {
             .unwrap_or((None, None));
         let (error_kind, error_msg) = error
             .map(error_fields)
-            .map(|(kind, message)| (Some(kind), Some(message)))
+            .map(|(kind, message)| (Some(kind), message))
             .unwrap_or((None, None));
         let changed = self.0.execute(
             "UPDATE tasks SET status = ?1,
@@ -455,15 +455,14 @@ fn usage_row(row: &Row<'_>) -> rusqlite::Result<UsageRow> {
     })
 }
 
-fn error_fields(error: &OcrError) -> (&'static str, String) {
-    let kind = match error {
-        OcrError::Auth => "auth",
-        OcrError::Quota => "quota",
-        OcrError::Network(_) => "network",
-        OcrError::Server(_) => "server",
-        OcrError::Parse(_) => "parse",
-    };
-    (kind, error.to_string())
+fn error_fields(error: &OcrError) -> (&'static str, Option<String>) {
+    match error {
+        OcrError::Auth => ("auth", None),
+        OcrError::Quota => ("quota", None),
+        OcrError::Network(detail) => ("network", Some(detail.clone())),
+        OcrError::Server(detail) => ("server", Some(detail.clone())),
+        OcrError::Parse(detail) => ("parse", Some(detail.clone())),
+    }
 }
 
 #[cfg(test)]
@@ -507,6 +506,81 @@ mod tests {
         assert_eq!(s.unfinished_tasks().unwrap().len(), 1);
         s.update_status("t1", "done", None, None).unwrap();
         assert!(s.unfinished_tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_task_rows_store_only_raw_internal_detail() {
+        let (_d, s) = tmp_store();
+        let cases = [
+            ("auth", OcrError::Auth, "auth", None),
+            ("quota", OcrError::Quota, "quota", None),
+            (
+                "network",
+                OcrError::Network("socket timeout".into()),
+                "network",
+                Some("socket timeout"),
+            ),
+            (
+                "server",
+                OcrError::Server("gateway 503".into()),
+                "server",
+                Some("gateway 503"),
+            ),
+            (
+                "parse",
+                OcrError::Parse("missing field".into()),
+                "parse",
+                Some("missing field"),
+            ),
+        ];
+
+        for (id, error, _, _) in &cases {
+            s.insert_task(
+                &NewTask {
+                    id: (*id).into(),
+                    service: ServiceId::Vl16,
+                    input_path: format!("{id}.png"),
+                    options_json: "{}".into(),
+                },
+                true,
+            )
+            .unwrap();
+            s.update_status(id, "failed", None, Some(error)).unwrap();
+        }
+
+        let rows = s.list_tasks(Some("failed")).unwrap();
+        for (id, _, kind, detail) in cases {
+            let row = rows.iter().find(|row| row.id == id).unwrap();
+            assert_eq!(row.error_kind.as_deref(), Some(kind));
+            assert_eq!(row.error_msg.as_deref(), detail);
+        }
+
+        s.insert_task(
+            &NewTask {
+                id: "active".into(),
+                service: ServiceId::Vl16,
+                input_path: "active.png".into(),
+                options_json: "{}".into(),
+            },
+            true,
+        )
+        .unwrap();
+        assert!(s
+            .update_status_if_active(
+                "active",
+                "failed",
+                None,
+                Some(&OcrError::Server("upstream 503".into())),
+            )
+            .unwrap());
+        let active = s
+            .list_tasks(Some("failed"))
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == "active")
+            .unwrap();
+        assert_eq!(active.error_kind.as_deref(), Some("server"));
+        assert_eq!(active.error_msg.as_deref(), Some("upstream 503"));
     }
 
     #[test]

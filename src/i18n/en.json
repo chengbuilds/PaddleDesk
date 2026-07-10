@@ -24,7 +24,84 @@
     "meterLabel": "{{used}} of {{quota}} pages used today"
   },
   "actions": {
-    "retry": "Retry"
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "chooseFiles": "Choose files"
+  },
+  "common": {
+    "loading": "Loading…"
+  },
+  "home": {
+    "dropTitle": "Drop images or PDFs to start recognition",
+    "dropDescription": "Supports png, jpg, jpeg, webp, and pdf. Multiple files are queued automatically.",
+    "cloudDisclosure": "Files are uploaded to Baidu Cloud for recognition.",
+    "supportedFiles": "Supported files",
+    "submitFailed": "Files could not be added. Please try again.",
+    "selectService": "Choose a service",
+    "serviceHelp": "Select an official cloud model for the task",
+    "recent": "Recent tasks",
+    "recentHint": "Double-click to open the result",
+    "loadFailed": "Recent tasks could not be loaded.",
+    "empty": "No tasks yet. Choose or drop files to get started.",
+    "serviceCards": {
+      "vl16": {
+        "tag": "Recommended",
+        "description": "Multimodal parsing for complex documents with structured Markdown output.",
+        "fit": "Papers, scanned books, complex layouts, and handwriting"
+      },
+      "ppOcrV6": {
+        "tag": "Fastest",
+        "description": "Fast scene-text recognition with broad language support.",
+        "fit": "Screenshots, photos, street scenes, and identity documents"
+      },
+      "structureV3": {
+        "tag": "Precise coordinates",
+        "description": "Preserves layout structure and precise coordinates for structured extraction.",
+        "fit": "Table extraction, searchable PDFs, and layout reconstruction"
+      }
+    }
+  },
+  "queue": {
+    "summary": "{{active}} active · {{failed}} failed",
+    "loadFailed": "The task queue could not be loaded.",
+    "actionFailed": "The action failed. Please try again.",
+    "empty": "The queue is empty.",
+    "persistenceNote": "Tasks are kept on this device and resume after restart."
+  },
+  "status": {
+    "pending": "Waiting",
+    "uploading": "Uploading",
+    "processing": "Recognizing",
+    "done": "Completed",
+    "failed": "Failed",
+    "canceled": "Canceled"
+  },
+  "task": {
+    "progress": "Page {{page}} of {{total}}",
+    "progressLabel": "Recognition progress for {{name}}"
+  },
+  "errors": {
+    "technicalDetails": "Technical details",
+    "auth": {
+      "message": "Your token is invalid or has expired.",
+      "suggestion": "Update the AI Studio token in Settings."
+    },
+    "quota": {
+      "message": "Today's quota has been used up.",
+      "suggestion": "Switch to another model or wait for tomorrow's reset."
+    },
+    "network": {
+      "message": "The network connection failed.",
+      "suggestion": "Check your network or proxy settings, then retry."
+    },
+    "server": {
+      "message": "The service is temporarily unavailable.",
+      "suggestion": "Please try again later."
+    },
+    "parse": {
+      "message": "The recognition result could not be parsed.",
+      "suggestion": "Check for updates and report the issue if it continues."
+    }
   },
   "runtime": {
     "queueEventsUnavailable": "Task updates are unavailable."

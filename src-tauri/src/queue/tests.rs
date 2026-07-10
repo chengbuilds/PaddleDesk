@@ -797,3 +797,30 @@ async fn resume_picks_up_unfinished() {
         _ => panic!("resumed task should succeed"),
     }
 }
+
+#[tokio::test]
+async fn resume_can_start_worker_outside_a_tokio_context() {
+    let (q, store, mut rx) = setup(MockOcr::new(), 1).await;
+    store
+        .lock()
+        .unwrap()
+        .insert_task(
+            &NewTask {
+                id: "old".into(),
+                service: ServiceId::Vl16,
+                input_path: "b.png".into(),
+                options_json: "{}".into(),
+            },
+            true,
+        )
+        .unwrap();
+
+    std::thread::spawn(move || q.resume())
+        .join()
+        .expect("resume must not require a caller-owned Tokio runtime");
+
+    match terminal(&mut rx).await {
+        QueueEvent::Done { id } => assert_eq!(id, "old"),
+        _ => panic!("resumed task should succeed"),
+    }
+}

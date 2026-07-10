@@ -24,7 +24,84 @@
     "meterLabel": "今日已用 {{used}} 页，共 {{quota}} 页"
   },
   "actions": {
-    "retry": "重试"
+    "retry": "重试",
+    "cancel": "取消",
+    "chooseFiles": "选择文件"
+  },
+  "common": {
+    "loading": "正在加载…"
+  },
+  "home": {
+    "dropTitle": "拖入图片或 PDF，开始识别",
+    "dropDescription": "支持 png / jpg / jpeg / webp / pdf，多文件会自动进入队列。",
+    "cloudDisclosure": "文件将上传至百度云端识别。",
+    "supportedFiles": "支持的文件",
+    "submitFailed": "无法添加文件，请重试。",
+    "selectService": "选择服务",
+    "serviceHelp": "按任务类型选择官方云端模型",
+    "recent": "最近任务",
+    "recentHint": "双击打开结果",
+    "loadFailed": "无法加载最近任务。",
+    "empty": "还没有任务。选择或拖入文件即可开始。",
+    "serviceCards": {
+      "vl16": {
+        "tag": "推荐",
+        "description": "适合复杂文档的多模态解析，输出结构化 Markdown。",
+        "fit": "论文、扫描书、复杂版面、手写体"
+      },
+      "ppOcrV6": {
+        "tag": "最快",
+        "description": "面向场景文字的快速识别，支持多种语言。",
+        "fit": "截图取字、照片、街景、证件"
+      },
+      "structureV3": {
+        "tag": "精细坐标",
+        "description": "保留版面结构和精细坐标，适合结构化提取。",
+        "fit": "表格提取、双层 PDF、版面还原"
+      }
+    }
+  },
+  "queue": {
+    "summary": "{{active}} 个进行中 · {{failed}} 个失败",
+    "loadFailed": "无法加载任务队列。",
+    "actionFailed": "操作失败，请重试。",
+    "empty": "队列为空。",
+    "persistenceNote": "任务会保留在本机，重新启动后继续处理。"
+  },
+  "status": {
+    "pending": "等待中",
+    "uploading": "上传中",
+    "processing": "识别中",
+    "done": "已完成",
+    "failed": "失败",
+    "canceled": "已取消"
+  },
+  "task": {
+    "progress": "第 {{page}} / {{total}} 页",
+    "progressLabel": "{{name}} 的识别进度"
+  },
+  "errors": {
+    "technicalDetails": "技术详情",
+    "auth": {
+      "message": "Token 无效或已过期。",
+      "suggestion": "请在设置中更新 AI Studio Token。"
+    },
+    "quota": {
+      "message": "今日额度已用尽。",
+      "suggestion": "可改用其他模型，或等待明日额度重置。"
+    },
+    "network": {
+      "message": "网络连接失败。",
+      "suggestion": "检查网络或代理设置后重试。"
+    },
+    "server": {
+      "message": "服务暂时不可用。",
+      "suggestion": "请稍后重试。"
+    },
+    "parse": {
+      "message": "无法解析识别结果。",
+      "suggestion": "请检查更新；若问题持续，请报告问题。"
+    }
   },
   "runtime": {
     "queueEventsUnavailable": "无法接收任务更新。"

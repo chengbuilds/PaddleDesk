@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { TaskSummary } from "../stores/app";
+import type { ServiceId } from "../stores/app";
 
 interface ProgressPayload {
   id: string;
@@ -21,6 +22,21 @@ interface FailedPayload extends IdPayload {
 
 export const getSettings = () =>
   invoke<Record<string, string>>("get_settings");
+
+export const createTasks = (paths: string[], service: ServiceId) =>
+  invoke<string[]>("create_tasks", {
+    paths,
+    service,
+    options: { lang: null },
+  });
+
+export const listTasks = (status: string | null) =>
+  invoke<TaskSummary[]>("list_tasks", { status });
+
+export const cancelTask = (id: string) =>
+  invoke<void>("cancel_task", { id });
+
+export const retryTask = (id: string) => invoke<void>("retry_task", { id });
 
 export async function onQueueEvent(
   callback: (update: TaskSummary) => void,

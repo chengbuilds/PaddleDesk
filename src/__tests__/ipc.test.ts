@@ -8,7 +8,14 @@ const { invokeMock, listenMock } = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
-import { getSettings, onQueueEvent } from "../lib/ipc";
+import {
+  cancelTask,
+  createTasks,
+  getSettings,
+  listTasks,
+  onQueueEvent,
+  retryTask,
+} from "../lib/ipc";
 import { useApp } from "../stores/app";
 
 beforeEach(() => {
@@ -23,6 +30,32 @@ test("getSettings preserves the Record returned by Tauri", async () => {
 
   await expect(getSettings()).resolves.toBe(settings);
   expect(invokeMock).toHaveBeenCalledWith("get_settings");
+});
+
+test("task command wrappers use the current Rust argument names exactly", async () => {
+  invokeMock
+    .mockResolvedValueOnce(["task-1"])
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce(null);
+
+  await expect(createTasks(["C:/docs/a.png"], "pp_ocr_v6")).resolves.toEqual([
+    "task-1",
+  ]);
+  await expect(listTasks(null)).resolves.toEqual([]);
+  await cancelTask("task-1");
+  await retryTask("task-1");
+
+  expect(invokeMock.mock.calls).toEqual([
+    ["create_tasks", {
+      paths: ["C:/docs/a.png"],
+      service: "pp_ocr_v6",
+      options: { lang: null },
+    }],
+    ["list_tasks", { status: null }],
+    ["cancel_task", { id: "task-1" }],
+    ["retry_task", { id: "task-1" }],
+  ]);
 });
 
 test("subscribes to exactly four task events and maps event.payload", async () => {

@@ -30,6 +30,9 @@ export interface AppState {
   setService: (service: ServiceId) => void;
   tasks: TaskSummary[];
   upsertTask: (task: TaskSummary) => void;
+  mergeTasks: (tasks: TaskSummary[]) => void;
+  selectedTaskId: string | null;
+  setSelectedTaskId: (id: string | null) => void;
 }
 
 export const useApp = create<AppState>((set) => ({
@@ -49,4 +52,21 @@ export const useApp = create<AppState>((set) => ({
       tasks[index] = { ...tasks[index], ...task };
       return { tasks };
     }),
+  mergeTasks: (incoming) =>
+    set((state) => {
+      const current = new Map(state.tasks.map((task) => [task.id, task]));
+      const tasks = incoming.map((task) => ({
+        ...task,
+        ...current.get(task.id),
+      }));
+      const incomingIds = new Set(incoming.map(({ id }) => id));
+      return {
+        tasks: [
+          ...tasks,
+          ...state.tasks.filter(({ id }) => !incomingIds.has(id)),
+        ],
+      };
+    }),
+  selectedTaskId: null,
+  setSelectedTaskId: (selectedTaskId) => set({ selectedTaskId }),
 }));

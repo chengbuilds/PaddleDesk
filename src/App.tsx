@@ -5,6 +5,8 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { onQueueEvent } from "./lib/ipc";
 import { useApp, type View } from "./stores/app";
+import { Home } from "./views/Home";
+import { Queue } from "./views/Queue";
 
 const titleKeys: Record<View, string> = {
   home: "viewTitles.home",
@@ -45,6 +47,15 @@ function App() {
     };
   }, [subscriptionAttempt, upsertTask]);
 
+  const content =
+    view === "home" ? (
+      <Home />
+    ) : view === "queue" ? (
+      <Queue />
+    ) : (
+      <h1>{t(titleKeys[view])}</h1>
+    );
+
   return (
     <div className="app-shell">
       <Sidebar />
@@ -61,9 +72,7 @@ function App() {
             </button>
           </div>
         )}
-        <main className="view-content">
-          <h1>{t(titleKeys[view])}</h1>
-        </main>
+        <main className="view-content">{content}</main>
       </section>
     </div>
   );

@@ -10,21 +10,33 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-const { invokeMock, listenMock } = vi.hoisted(() => ({
+const { getCurrentWebviewMock, invokeMock, listenMock, onDragDropEventMock } =
+  vi.hoisted(() => ({
+    getCurrentWebviewMock: vi.fn(),
   invokeMock: vi.fn(),
   listenMock: vi.fn(),
-}));
+    onDragDropEventMock: vi.fn(),
+  }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: getCurrentWebviewMock,
+}));
 
 import App from "../App";
 import { initI18n } from "../i18n";
 import { useApp } from "../stores/app";
 
 beforeEach(async () => {
-  invokeMock.mockReset().mockResolvedValue({ language: "zh-CN" });
+  invokeMock.mockReset().mockImplementation(async (command) =>
+    command === "get_settings" ? { language: "zh-CN" } : [],
+  );
   listenMock.mockReset().mockImplementation(async () => vi.fn());
+  onDragDropEventMock.mockReset().mockImplementation(async () => vi.fn());
+  getCurrentWebviewMock.mockReset().mockReturnValue({
+    onDragDropEvent: onDragDropEventMock,
+  });
   useApp.setState({ view: "home", service: "vl16", tasks: [] });
   await initI18n();
 });
