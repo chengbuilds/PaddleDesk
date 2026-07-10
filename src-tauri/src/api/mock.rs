@@ -42,17 +42,31 @@ impl MockOcr {
 
     fn canned() -> RecognitionResult {
         RecognitionResult {
-            markdown: "# Mock 文档\n\n这是模拟识别结果。".into(),
+            markdown: "# Mock 文档\n\n这是模拟识别结果。\n\n| 名称 | 数量 |\n| --- | --- |\n| 苹果 | 2 |\n\n$E=mc^2$".into(),
             page_count: 1,
             pages: vec![Page {
                 width: 595.0,
                 height: 842.0,
-                blocks: vec![Block {
-                    id: "b1".into(),
-                    kind: BlockKind::Text,
-                    bbox: Some([50.0, 50.0, 545.0, 90.0]),
-                    content: "这是模拟识别结果。".into(),
-                }],
+                blocks: vec![
+                    Block {
+                        id: "b1".into(),
+                        kind: BlockKind::Text,
+                        bbox: Some([50.0, 50.0, 545.0, 90.0]),
+                        content: "这是模拟识别结果。".into(),
+                    },
+                    Block {
+                        id: "table1".into(),
+                        kind: BlockKind::Table,
+                        bbox: Some([50.0, 130.0, 545.0, 300.0]),
+                        content: "名称,数量\n苹果,2".into(),
+                    },
+                    Block {
+                        id: "formula1".into(),
+                        kind: BlockKind::Formula,
+                        bbox: Some([50.0, 340.0, 300.0, 410.0]),
+                        content: "E=mc^2".into(),
+                    },
+                ],
             }],
         }
     }
@@ -112,6 +126,14 @@ mod tests {
             .unwrap();
         assert_eq!(r.page_count, 1);
         assert!(!r.pages[0].blocks.is_empty());
+        assert!(r.pages[0]
+            .blocks
+            .iter()
+            .any(|block| block.kind == BlockKind::Table));
+        assert!(r.pages[0]
+            .blocks
+            .iter()
+            .any(|block| block.kind == BlockKind::Formula));
         assert!(hits.load(std::sync::atomic::Ordering::SeqCst) >= 1);
     }
 

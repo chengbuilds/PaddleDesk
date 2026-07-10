@@ -70,6 +70,43 @@
     "empty": "队列为空。",
     "persistenceNote": "任务会保留在本机，重新启动后继续处理。"
   },
+  "viewer": {
+    "original": "原文档",
+    "originalAlt": "待核对的原始文档",
+    "result": "识别结果",
+    "resultTabs": "结果格式",
+    "showBboxes": "显示识别区域",
+    "pdfPreview": "PDF 预览将在增强模式中渲染",
+    "previousPage": "上一页",
+    "nextPage": "下一页",
+    "page": "第 {{page}} / {{total}} 页",
+    "noSelection": "请先从主页或任务队列选择一个已完成任务。",
+    "noResult": "该任务还没有可查看的结果。",
+    "loadFailed": "无法加载识别结果。",
+    "exportFailed": "导出失败，请重试。",
+    "copyLatex": "复制 LaTeX",
+    "tabs": {
+      "markdown": "Markdown",
+      "json": "JSON",
+      "text": "纯文本"
+    },
+    "export": {
+      "md": "导出 Markdown",
+      "json": "导出 JSON",
+      "txt": "导出纯文本",
+      "csv": "导出 CSV"
+    },
+    "formats": {
+      "md": "Markdown 文档",
+      "json": "JSON 文件",
+      "txt": "纯文本",
+      "csv": "CSV 表格"
+    },
+    "copy": {
+      "copied": "LaTeX 已复制。",
+      "failed": "无法复制 LaTeX。"
+    }
+  },
   "status": {
     "pending": "等待中",
     "uploading": "上传中",

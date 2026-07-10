@@ -7,6 +7,7 @@ import { onQueueEvent } from "./lib/ipc";
 import { useApp, type View } from "./stores/app";
 import { Home } from "./views/Home";
 import { Queue } from "./views/Queue";
+import { Viewer } from "./views/Viewer";
 
 const titleKeys: Record<View, string> = {
   home: "viewTitles.home",
@@ -62,6 +63,8 @@ function App() {
       <Home />
     ) : view === "queue" ? (
       <Queue />
+    ) : view === "viewer" ? (
+      <Viewer />
     ) : (
       <h1>{t(titleKeys[view])}</h1>
     );

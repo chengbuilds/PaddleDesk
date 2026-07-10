@@ -70,6 +70,43 @@
     "empty": "The queue is empty.",
     "persistenceNote": "Tasks are kept on this device and resume after restart."
   },
+  "viewer": {
+    "original": "Original",
+    "originalAlt": "Original document for review",
+    "result": "Recognition result",
+    "resultTabs": "Result format",
+    "showBboxes": "Show recognition regions",
+    "pdfPreview": "PDF rendering is available in enhanced preview mode",
+    "previousPage": "Previous",
+    "nextPage": "Next",
+    "page": "Page {{page}} of {{total}}",
+    "noSelection": "Select a completed task from Home or the Task Queue.",
+    "noResult": "This task does not have a result yet.",
+    "loadFailed": "The recognition result could not be loaded.",
+    "exportFailed": "The export failed. Please try again.",
+    "copyLatex": "Copy LaTeX",
+    "tabs": {
+      "markdown": "Markdown",
+      "json": "JSON",
+      "text": "Plain text"
+    },
+    "export": {
+      "md": "Export Markdown",
+      "json": "Export JSON",
+      "txt": "Export text",
+      "csv": "Export CSV"
+    },
+    "formats": {
+      "md": "Markdown document",
+      "json": "JSON file",
+      "txt": "Plain text",
+      "csv": "CSV table"
+    },
+    "copy": {
+      "copied": "LaTeX copied.",
+      "failed": "LaTeX could not be copied."
+    }
+  },
   "status": {
     "pending": "Waiting",
     "uploading": "Uploading",

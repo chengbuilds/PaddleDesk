@@ -4,6 +4,28 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TaskSummary } from "../stores/app";
 import type { ServiceId } from "../stores/app";
 
+export type BlockKind = "text" | "table" | "formula" | "seal" | "chart";
+export type ExportFormat = "md" | "json" | "txt" | "csv";
+
+export interface RecognitionBlock {
+  id: string;
+  kind: BlockKind;
+  bbox: [number, number, number, number] | null;
+  content: string;
+}
+
+export interface RecognitionPage {
+  width: number;
+  height: number;
+  blocks: RecognitionBlock[];
+}
+
+export interface RecognitionResult {
+  markdown: string;
+  page_count: number;
+  pages: RecognitionPage[];
+}
+
 interface ProgressPayload {
   id: string;
   stage: "uploading" | "processing";
@@ -37,6 +59,22 @@ export const cancelTask = (id: string) =>
   invoke<void>("cancel_task", { id });
 
 export const retryTask = (id: string) => invoke<void>("retry_task", { id });
+
+export const getResult = (taskId: string) =>
+  invoke<RecognitionResult | null>("get_result", { taskId });
+
+export const exportResult = (
+  taskId: string,
+  format: ExportFormat,
+  path: string,
+  blockId?: string,
+) =>
+  invoke<string>("export_result", {
+    taskId,
+    format,
+    path,
+    blockId: blockId ?? null,
+  });
 
 export async function onQueueEvent(
   callback: (update: TaskSummary) => void,
