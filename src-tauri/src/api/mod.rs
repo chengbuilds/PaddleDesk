@@ -22,7 +22,7 @@ pub struct ParseOptions {
 }
 
 /// 页级进度回调 (extracted_pages, total_pages)——真实 API 为异步任务轮询，
-/// 进度产生在 parse 内部（见 docs/api/paddleocr-api.md），故回调进 trait
+/// 进度产生在 parse 内部，故回调进 trait
 pub type ProgressFn = Box<dyn Fn(u32, u32) + Send + Sync>;
 pub type CheckpointFn = Arc<dyn Fn(&[String]) -> Result<(), OcrError> + Send + Sync>;
 
