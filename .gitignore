@@ -1,8 +1,46 @@
-.superpowers/
+# Local agent state and internal docs
+/.agents/
+/.codex/
+/.superpowers/
+/docs/
+/CLAUDE.md
+
 node_modules/
 target/
 dist/
+/.vite/
 *.local
+.env
+.env.*
+!.env.example
 
 # Spike 0 实测材料，含真实 token/敏感样张，永不入库
 /test/
+
+# CodeGraph 本地索引（生成物）
+.codegraph/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# scaffold (create-tauri-app) extras
+dist-ssr
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
