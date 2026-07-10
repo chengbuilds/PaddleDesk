@@ -15,10 +15,11 @@ export function Queue() {
 
   useEffect(() => {
     let active = true;
+    const baseRevision = useApp.getState().taskRevision;
     void listTasks(null).then(
       (rows) => {
         if (active) {
-          mergeTasks(rows);
+          mergeTasks(rows, baseRevision);
           setLoading(false);
           setLoadFailed(false);
         }

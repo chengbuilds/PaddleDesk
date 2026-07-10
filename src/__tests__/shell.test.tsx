@@ -71,16 +71,50 @@ test("renders six semantic nav buttons and switches the current view", () => {
   );
 });
 
-test("switches among the three service wire values", () => {
+test("switches among the three service wire values", async () => {
   render(<App />);
 
-  fireEvent.click(screen.getByRole("button", { name: "PP-OCRv6" }));
+  fireEvent.click(await screen.findByRole("button", { name: "PP-OCRv6" }));
 
   expect(useApp.getState().service).toBe("pp_ocr_v6");
   expect(screen.getByRole("button", { name: "PP-OCRv6" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+});
+
+test("waits for all task listeners before mounting the task view", async () => {
+  const resolveListeners: Array<(unlisten: () => void) => void> = [];
+  listenMock.mockImplementation(
+    () =>
+      new Promise<() => void>((resolve) => {
+        resolveListeners.push(resolve);
+      }),
+  );
+
+  render(<App />);
+  await waitFor(() => expect(resolveListeners).toHaveLength(1));
+  expect(invokeMock).not.toHaveBeenCalledWith("list_tasks", { status: null });
+  expect(onDragDropEventMock).not.toHaveBeenCalled();
+
+  for (let index = 0; index < 3; index += 1) {
+    await act(async () => {
+      resolveListeners[index](vi.fn());
+      await flushPromises();
+    });
+    await waitFor(() => expect(resolveListeners).toHaveLength(index + 2));
+    expect(invokeMock).not.toHaveBeenCalledWith("list_tasks", { status: null });
+  }
+
+  await act(async () => {
+    resolveListeners[3](vi.fn());
+    await flushPromises();
+  });
+
+  await waitFor(() =>
+    expect(invokeMock).toHaveBeenCalledWith("list_tasks", { status: null }),
+  );
+  expect(onDragDropEventMock).toHaveBeenCalledOnce();
 });
 
 test("StrictMode and unmount eventually release every async listener", async () => {
@@ -120,6 +154,7 @@ test("shows a localized retryable alert when listener registration fails", async
 
   const alert = screen.getByRole("alert");
   expect(alert).toHaveTextContent("无法接收任务更新。");
+  expect(invokeMock).not.toHaveBeenCalledWith("list_tasks", { status: null });
 
   await act(async () => {
     fireEvent.click(within(alert).getByRole("button", { name: "重试" }));

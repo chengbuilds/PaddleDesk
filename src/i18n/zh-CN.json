@@ -36,7 +36,8 @@
     "dropDescription": "支持 png / jpg / jpeg / webp / pdf，多文件会自动进入队列。",
     "cloudDisclosure": "文件将上传至百度云端识别。",
     "supportedFiles": "支持的文件",
-    "submitFailed": "无法添加文件，请重试。",
+    "submitFailed": "无法添加文件。",
+    "dropRegistrationFailed": "无法监听文件拖放。",
     "selectService": "选择服务",
     "serviceHelp": "按任务类型选择官方云端模型",
     "recent": "最近任务",
@@ -101,10 +102,15 @@
     "parse": {
       "message": "无法解析识别结果。",
       "suggestion": "请检查更新；若问题持续，请报告问题。"
+    },
+    "unknown": {
+      "message": "识别任务失败。",
+      "suggestion": "发生了未知错误，请查看技术详情后重试。"
     }
   },
   "runtime": {
-    "queueEventsUnavailable": "无法接收任务更新。"
+    "queueEventsUnavailable": "无法接收任务更新。",
+    "connectingQueueEvents": "正在连接任务更新…"
   },
   "viewTitles": {
     "home": "主页",

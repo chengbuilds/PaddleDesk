@@ -27,8 +27,8 @@ export function TaskRowItem({
 }: TaskRowItemProps) {
   const { t } = useTranslation();
   const status = task.status ?? "pending";
-  const errorKind = (task.error_kind ?? "parse").toLowerCase();
-  const errorKey = errorKinds.has(errorKind) ? errorKind : "parse";
+  const errorKind = (task.error_kind ?? "unknown").toLowerCase();
+  const errorKey = errorKinds.has(errorKind) ? errorKind : "unknown";
   const progress =
     status === "processing" && task.total_pages
       ? t("task.progress", {

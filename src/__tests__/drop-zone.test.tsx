@@ -1,5 +1,12 @@
 import { StrictMode } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const { getCurrentWebviewMock, invokeMock, onDragDropEventMock, openMock } =
@@ -118,6 +125,49 @@ test("does not resubscribe on an ordinary rerender and still cleans up", async (
   rerender(<DropZone onPaths={onPaths} />);
 
   expect(onDragDropEventMock).toHaveBeenCalledOnce();
+  unmount();
+  expect(unlisten).toHaveBeenCalledOnce();
+});
+
+test("retries drop registration without hiding an independent submit error", async () => {
+  let dropHandler: ((event: unknown) => void) | undefined;
+  const unlisten = vi.fn();
+  onDragDropEventMock
+    .mockRejectedValueOnce(new Error("drag unavailable"))
+    .mockImplementationOnce(async (handler) => {
+      dropHandler = handler;
+      return unlisten;
+    });
+  openMock.mockResolvedValue(["C:/docs/page.png"]);
+  const onPaths = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("submit failed"))
+    .mockResolvedValueOnce(undefined);
+
+  const { unmount } = render(<DropZone onPaths={onPaths} />);
+  const registrationMessage = await screen.findByText("无法监听文件拖放。");
+  const registrationAlert =
+    registrationMessage.closest<HTMLElement>('[role="alert"]');
+  expect(registrationAlert).not.toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "选择文件" }));
+  expect(await screen.findByText("无法添加文件。")).toBeInTheDocument();
+  expect(registrationMessage).toBeInTheDocument();
+
+  fireEvent.click(
+    within(registrationAlert!).getByRole("button", { name: "重试" }),
+  );
+  await waitFor(() => expect(onDragDropEventMock).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(dropHandler).toBeDefined());
+  expect(screen.queryByText("无法监听文件拖放。")).not.toBeInTheDocument();
+  expect(screen.getByText("无法添加文件。")).toBeInTheDocument();
+
+  dropHandler!({ payload: { type: "drop", paths: ["C:/docs/page.png"] } });
+  await waitFor(() => expect(onPaths).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect(screen.queryByText("无法添加文件。")).not.toBeInTheDocument(),
+  );
+
   unmount();
   expect(unlisten).toHaveBeenCalledOnce();
 });

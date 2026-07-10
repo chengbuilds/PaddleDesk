@@ -13,14 +13,25 @@ interface DropZoneProps {
 
 export function DropZone({ onPaths }: DropZoneProps) {
   const { t } = useTranslation();
-  const [error, setError] = useState(false);
+  const [registrationError, setRegistrationError] = useState(false);
+  const [submitError, setSubmitError] = useState(false);
+  const [registrationAttempt, setRegistrationAttempt] = useState(0);
 
   const submit = useCallback(
     (paths: string[]) => {
       const supported = filterSupported(paths);
       if (supported.length === 0) return;
-      setError(false);
-      void Promise.resolve(onPaths(supported)).catch(() => setError(true));
+      let submission: void | Promise<void>;
+      try {
+        submission = onPaths(supported);
+      } catch {
+        setSubmitError(true);
+        return;
+      }
+      void Promise.resolve(submission).then(
+        () => setSubmitError(false),
+        () => setSubmitError(true),
+      );
     },
     [onPaths],
   );
@@ -35,10 +46,13 @@ export function DropZone({ onPaths }: DropZoneProps) {
     void getCurrentWebview().onDragDropEvent(handleDragDrop).then(
       (unlisten) => {
         if (disposed) unlisten();
-        else cleanup = unlisten;
+        else {
+          cleanup = unlisten;
+          setRegistrationError(false);
+        }
       },
       () => {
-        if (!disposed) setError(true);
+        if (!disposed) setRegistrationError(true);
       },
     );
 
@@ -46,7 +60,7 @@ export function DropZone({ onPaths }: DropZoneProps) {
       disposed = true;
       cleanup?.();
     };
-  }, [submit]);
+  }, [registrationAttempt, submit]);
 
   const chooseFiles = async () => {
     try {
@@ -56,7 +70,7 @@ export function DropZone({ onPaths }: DropZoneProps) {
       });
       submit(selected ?? []);
     } catch {
-      setError(true);
+      setSubmitError(true);
     }
   };
 
@@ -69,7 +83,18 @@ export function DropZone({ onPaths }: DropZoneProps) {
       <button className="secondary-button" type="button" onClick={chooseFiles}>
         {t("actions.chooseFiles")}
       </button>
-      {error && <p role="alert">{t("home.submitFailed")}</p>}
+      {registrationError && (
+        <div role="alert">
+          <span>{t("home.dropRegistrationFailed")}</span>
+          <button
+            type="button"
+            onClick={() => setRegistrationAttempt((attempt) => attempt + 1)}
+          >
+            {t("actions.retry")}
+          </button>
+        </div>
+      )}
+      {submitError && <p role="alert">{t("home.submitFailed")}</p>}
     </section>
   );
 }

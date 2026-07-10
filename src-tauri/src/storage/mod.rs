@@ -204,8 +204,11 @@ impl Store {
     pub fn list_tasks(&self, status_filter: Option<&str>) -> Result<Vec<TaskRow>> {
         let sql = format!("SELECT {TASK_COLUMNS} FROM tasks");
         match status_filter {
-            Some(status) => self.query_tasks(&(sql + " WHERE status = ?1"), &[&status]),
-            None => self.query_tasks(&sql, &[]),
+            Some(status) => self.query_tasks(
+                &(sql + " WHERE status = ?1 ORDER BY created_at DESC, rowid DESC"),
+                &[&status],
+            ),
+            None => self.query_tasks(&(sql + " ORDER BY created_at DESC, rowid DESC"), &[]),
         }
     }
 
@@ -506,6 +509,36 @@ mod tests {
         assert_eq!(s.unfinished_tasks().unwrap().len(), 1);
         s.update_status("t1", "done", None, None).unwrap();
         assert!(s.unfinished_tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_tasks_orders_same_second_rows_by_newest_rowid() {
+        let (_d, s) = tmp_store();
+        for id in ["first", "second", "third"] {
+            s.insert_task(
+                &NewTask {
+                    id: id.into(),
+                    service: ServiceId::Vl16,
+                    input_path: format!("{id}.png"),
+                    options_json: "{}".into(),
+                },
+                true,
+            )
+            .unwrap();
+        }
+        s.0.execute("UPDATE tasks SET created_at = 1", []).unwrap();
+
+        let ids = |status| {
+            s.list_tasks(status)
+                .unwrap()
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>()
+        };
+        let expected = ["third", "second", "first"].map(str::to_string);
+
+        assert_eq!(ids(None), expected);
+        assert_eq!(ids(Some("pending")), expected);
     }
 
     #[test]

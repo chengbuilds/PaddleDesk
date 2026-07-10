@@ -18,8 +18,9 @@ export function Home() {
   const [loadFailed, setLoadFailed] = useState(false);
 
   const refresh = useCallback(async () => {
+    const baseRevision = useApp.getState().taskRevision;
     const rows = await listTasks(null);
-    mergeTasks(rows);
+    mergeTasks(rows, baseRevision);
   }, [mergeTasks]);
 
   useEffect(() => {

@@ -23,14 +23,20 @@ export interface TaskSummary {
   created_at?: number;
 }
 
+type TaskField = Exclude<keyof TaskSummary, "id">;
+type TaskFieldRevisions = Partial<Record<TaskField, number>>;
+
 export interface AppState {
   view: View;
   setView: (view: View) => void;
   service: ServiceId;
   setService: (service: ServiceId) => void;
   tasks: TaskSummary[];
+  taskRevision: number;
+  taskRevisions: Record<string, number>;
+  taskFieldRevisions: Record<string, TaskFieldRevisions>;
   upsertTask: (task: TaskSummary) => void;
-  mergeTasks: (tasks: TaskSummary[]) => void;
+  mergeTasks: (tasks: TaskSummary[], baseRevision: number) => void;
   selectedTaskId: string | null;
   setSelectedTaskId: (id: string | null) => void;
 }
@@ -41,29 +47,72 @@ export const useApp = create<AppState>((set) => ({
   service: "vl16",
   setService: (service) => set({ service }),
   tasks: [],
+  taskRevision: 0,
+  taskRevisions: {},
+  taskFieldRevisions: {},
   upsertTask: (task) =>
     set((state) => {
+      const revision = state.taskRevision + 1;
+      const fieldRevisions = {
+        ...state.taskFieldRevisions[task.id],
+      };
+      for (const field of Object.keys(task) as (keyof TaskSummary)[]) {
+        if (field !== "id") {
+          fieldRevisions[field] = revision;
+        }
+      }
       const index = state.tasks.findIndex(({ id }) => id === task.id);
       if (index === -1) {
-        return { tasks: [...state.tasks, task] };
+        return {
+          tasks: [...state.tasks, task],
+          taskRevision: revision,
+          taskRevisions: { ...state.taskRevisions, [task.id]: revision },
+          taskFieldRevisions: {
+            ...state.taskFieldRevisions,
+            [task.id]: fieldRevisions,
+          },
+        };
       }
 
       const tasks = [...state.tasks];
       tasks[index] = { ...tasks[index], ...task };
-      return { tasks };
+      return {
+        tasks,
+        taskRevision: revision,
+        taskRevisions: { ...state.taskRevisions, [task.id]: revision },
+        taskFieldRevisions: {
+          ...state.taskFieldRevisions,
+          [task.id]: fieldRevisions,
+        },
+      };
     }),
-  mergeTasks: (incoming) =>
+  mergeTasks: (incoming, baseRevision) =>
     set((state) => {
       const current = new Map(state.tasks.map((task) => [task.id, task]));
-      const tasks = incoming.map((task) => ({
-        ...task,
-        ...current.get(task.id),
-      }));
+      const tasks = incoming.map((task) => {
+        const merged = { ...task };
+        const currentTask = current.get(task.id);
+        const revisions = state.taskFieldRevisions[task.id];
+
+        if (currentTask && revisions) {
+          for (const field of Object.keys(revisions) as TaskField[]) {
+            if ((revisions[field] ?? 0) > baseRevision) {
+              Object.assign(merged, { [field]: currentTask[field] });
+            }
+          }
+        }
+
+        return merged;
+      });
       const incomingIds = new Set(incoming.map(({ id }) => id));
       return {
         tasks: [
           ...tasks,
-          ...state.tasks.filter(({ id }) => !incomingIds.has(id)),
+          ...state.tasks.filter(
+            ({ id }) =>
+              !incomingIds.has(id) &&
+              (state.taskRevisions[id] ?? 0) > baseRevision,
+          ),
         ],
       };
     }),

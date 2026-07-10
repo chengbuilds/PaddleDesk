@@ -21,6 +21,7 @@ function App() {
   const { t } = useTranslation();
   const view = useApp((state) => state.view);
   const upsertTask = useApp((state) => state.upsertTask);
+  const [subscriptionReady, setSubscriptionReady] = useState(false);
   const [subscriptionFailed, setSubscriptionFailed] = useState(false);
   const [subscriptionAttempt, setSubscriptionAttempt] = useState(0);
 
@@ -33,11 +34,15 @@ function App() {
         if (disposed) unlisten();
         else {
           cleanup = unlisten;
+          setSubscriptionReady(true);
           setSubscriptionFailed(false);
         }
       },
       () => {
-        if (!disposed) setSubscriptionFailed(true);
+        if (!disposed) {
+          setSubscriptionReady(false);
+          setSubscriptionFailed(true);
+        }
       },
     );
 
@@ -47,8 +52,13 @@ function App() {
     };
   }, [subscriptionAttempt, upsertTask]);
 
+  const taskView = view === "home" || view === "queue";
   const content =
-    view === "home" ? (
+    taskView && !subscriptionReady ? (
+      subscriptionFailed ? null : (
+        <p role="status">{t("runtime.connectingQueueEvents")}</p>
+      )
+    ) : view === "home" ? (
       <Home />
     ) : view === "queue" ? (
       <Queue />
@@ -66,7 +76,10 @@ function App() {
             <span>{t("runtime.queueEventsUnavailable")}</span>
             <button
               type="button"
-              onClick={() => setSubscriptionAttempt((attempt) => attempt + 1)}
+              onClick={() => {
+                setSubscriptionFailed(false);
+                setSubscriptionAttempt((attempt) => attempt + 1);
+              }}
             >
               {t("actions.retry")}
             </button>

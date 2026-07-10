@@ -133,3 +133,28 @@ test("maps all five error kinds case-insensitively", async () => {
   }
   expect(within(list).getAllByText("技术详情")).toHaveLength(3);
 });
+
+test("uses the unknown copy instead of pretending a future error is Parse", async () => {
+  invokeMock.mockImplementation(async (command) => {
+    if (command === "list_tasks") {
+      return [
+        {
+          ...failed,
+          error_kind: "future_error",
+          error_msg: "future raw detail",
+        },
+      ];
+    }
+    throw new Error(`unexpected command: ${command}`);
+  });
+
+  render(<Queue />);
+  const list = await screen.findByRole("list", { name: "任务队列" });
+
+  expect(within(list).getByText("识别任务失败。")).toBeInTheDocument();
+  expect(
+    within(list).getByText("发生了未知错误，请查看技术详情后重试。"),
+  ).toBeInTheDocument();
+  expect(within(list).queryByText("无法解析识别结果。")).not.toBeInTheDocument();
+  expect(within(list).getByText("future raw detail")).toBeInTheDocument();
+});

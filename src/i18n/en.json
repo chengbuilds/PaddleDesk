@@ -36,7 +36,8 @@
     "dropDescription": "Supports png, jpg, jpeg, webp, and pdf. Multiple files are queued automatically.",
     "cloudDisclosure": "Files are uploaded to Baidu Cloud for recognition.",
     "supportedFiles": "Supported files",
-    "submitFailed": "Files could not be added. Please try again.",
+    "submitFailed": "Files could not be added.",
+    "dropRegistrationFailed": "File drops could not be monitored.",
     "selectService": "Choose a service",
     "serviceHelp": "Select an official cloud model for the task",
     "recent": "Recent tasks",
@@ -101,10 +102,15 @@
     "parse": {
       "message": "The recognition result could not be parsed.",
       "suggestion": "Check for updates and report the issue if it continues."
+    },
+    "unknown": {
+      "message": "The recognition task failed.",
+      "suggestion": "An unknown error occurred. Review the technical details and try again."
     }
   },
   "runtime": {
-    "queueEventsUnavailable": "Task updates are unavailable."
+    "queueEventsUnavailable": "Task updates are unavailable.",
+    "connectingQueueEvents": "Connecting to task updates…"
   },
   "viewTitles": {
     "home": "Home",
