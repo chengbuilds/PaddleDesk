@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaddleDesk — PaddleOCR 官方云 API 的开源 Windows OCR 桌面客户端</title>
+  <meta name="description" content="PaddleDesk 是接入百度 AI Studio PaddleOCR 官方云服务的免费开源 Windows OCR 工具：复杂文档、表格转 CSV、公式转 LaTeX、截图识别、Markdown 导出。客户端仅 6 MB。" />
+  <link rel="canonical" href="https://wangcheng6-ai.github.io/PaddleDesk/" />
+  <link rel="alternate" hreflang="zh-CN" href="https://wangcheng6-ai.github.io/PaddleDesk/" />
+  <link rel="alternate" hreflang="en" href="https://wangcheng6-ai.github.io/PaddleDesk/en.html" />
+  <link rel="alternate" hreflang="x-default" href="https://wangcheng6-ai.github.io/PaddleDesk/" />
+  <link rel="icon" type="image/png" href="assets/icon.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="PaddleDesk — PaddleOCR 官方云 API 的开源 Windows OCR 桌面客户端" />
+  <meta property="og:description" content="复杂文档、表格转 CSV、公式转 LaTeX、截图识别、Markdown 导出。免费开源，客户端仅 6 MB。" />
+  <meta property="og:image" content="https://wangcheng6-ai.github.io/PaddleDesk/assets/viewer.png" />
+  <meta property="og:url" content="https://wangcheng6-ai.github.io/PaddleDesk/" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="preload" as="image" href="assets/viewer.png" fetchpriority="high" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "PaddleDesk",
+    "operatingSystem": "Windows 10, Windows 11",
+    "applicationCategory": "UtilitiesApplication",
+    "description": "接入百度 AI Studio PaddleOCR 官方云 API 的开源 Windows OCR 桌面客户端，支持复杂文档识别、表格导出 CSV、公式复制 LaTeX、截图识别与 Markdown 导出。",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+    "downloadUrl": "https://github.com/wangcheng6-ai/PaddleDesk/releases/latest",
+    "softwareVersion": "0.1.0",
+    "license": "https://github.com/wangcheng6-ai/PaddleDesk/blob/main/LICENSE",
+    "url": "https://wangcheng6-ai.github.io/PaddleDesk/",
+    "sameAs": ["https://github.com/wangcheng6-ai/PaddleDesk"]
+  }
+  </script>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <img src="assets/icon.png" alt="" width="30" height="30" />
+    <strong>PaddleDesk</strong>
+    <nav aria-label="站内导航">
+      <a href="#features">功能</a>
+      <a href="#services">识别服务</a>
+      <a href="#shots">截图</a>
+      <a href="#download">下载</a>
+      <a href="https://github.com/wangcheng6-ai/PaddleDesk">GitHub</a>
+      <a class="lang-switch" href="en.html" hreflang="en">EN</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap">
+      <div class="badge-row">
+        <span>免费开源 · MIT</span>
+        <span>Windows 10 / 11</span>
+        <span>客户端仅 6 MB</span>
+        <span>PaddleOCR 官方云模型</span>
+      </div>
+      <h1 id="hero-title">把复杂文档，<br /><em>一键变成可编辑的结构化结果</em></h1>
+      <p class="lead">PaddleDesk 接入百度 AI Studio 的 PaddleOCR 官方云 API——表格还原成 CSV、公式复制为 LaTeX、整页转 Markdown。识别精度随官方云端模型持续升级，客户端始终轻量。</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/wangcheng6-ai/PaddleDesk/releases/latest">免费下载</a>
+        <a class="btn btn-ghost" href="https://github.com/wangcheng6-ai/PaddleDesk">查看源码</a>
+      </div>
+      <p class="fine">v0.1.0 · 无广告 · 无账号绑定，只需一个免费 AI Studio Token</p>
+      <img class="hero-shot" src="assets/viewer.png" alt="PaddleDesk 识别结果页：左侧原文档与识别区域可视化，右侧结构化 Markdown 结果" width="1280" height="800" loading="eager" fetchpriority="high" />
+    </div>
+  </section>
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <span class="kicker">功能</span>
+      <h2 id="features-title">桌面 OCR 该有的，都在</h2>
+      <p class="section-lead">从截图到批量 PDF，从纯文本到表格与公式——识别、核对、导出，一个窗口完成。</p>
+      <div class="bento">
+        <article class="card wide">
+          <span class="ico">📄</span>
+          <h3>复杂文档识别</h3>
+          <p>多栏版面、表格、公式、手写体交给 PaddleOCR-VL 视觉语言大模型；原文档与识别区域并排对照，逐页核对不丢内容。</p>
+        </article>
+        <article class="card wide">
+          <span class="ico">📊</span>
+          <h3>表格转 CSV · 公式转 LaTeX</h3>
+          <p>表格单独导出 CSV 直接进 Excel；公式一键复制 LaTeX 粘进论文。整页还能导出 Markdown、JSON、TXT。</p>
+        </article>
+        <article class="card">
+          <span class="ico">✂️</span>
+          <h3>截图即识别</h3>
+          <p><kbd>Ctrl+Alt+S</kbd> 框选屏幕任意区域，文字自动复制进剪贴板并弹出通知。</p>
+        </article>
+        <article class="card">
+          <span class="ico">🗂️</span>
+          <h3>批量队列</h3>
+          <p>拖入多个图片/PDF 自动排队，失败重试、断点续跑，重启应用不丢任务。</p>
+        </article>
+        <article class="card">
+          <span class="ico">🔍</span>
+          <h3>历史全文搜索</h3>
+          <p>识别过的内容全文可搜（SQLite FTS5）；隐私模式下则完全不留痕。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="services" aria-labelledby="services-title">
+    <div class="wrap">
+      <span class="kicker">识别服务</span>
+      <h2 id="services-title">三个官方云模型，按文档选</h2>
+      <p class="section-lead">每个服务独立免费额度，应用内分服务统计用量。</p>
+      <table class="svc-table">
+        <thead>
+          <tr><th scope="col">服务</th><th scope="col">定位</th><th scope="col">适合</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>PaddleOCR-VL-1.6</td><td>视觉语言大模型</td><td>复杂版面、手写体、图文混排文档</td></tr>
+          <tr><td>PP-OCRv6</td><td>通用文字识别</td><td>常规印刷体截图、单页图片的快速识别</td></tr>
+          <tr><td>PP-StructureV3</td><td>版面结构化</td><td>表格还原（CSV）、公式（LaTeX）、阅读顺序</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="shots" aria-labelledby="shots-title">
+    <div class="wrap">
+      <span class="kicker">界面</span>
+      <h2 id="shots-title">简洁，但不简陋</h2>
+      <p class="section-lead">浅色/深色主题、中英双语、托盘常驻——桌面应用的细节一个不少。</p>
+      <div class="shots">
+        <figure>
+          <img src="assets/home.png" alt="PaddleDesk 主页：拖放识别区域与最近任务列表" width="1280" height="800" loading="lazy" />
+          <figcaption>主页 — 拖放 / 截图 / 剪贴板，三种方式开始识别</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/usage.png" alt="PaddleDesk 用量页：三个服务的额度环与近 7 日用量统计" width="1280" height="800" loading="lazy" />
+          <figcaption>用量 — 三服务额度一目了然，不怕跑超</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <div class="privacy">
+    <div class="wrap">
+      <strong>隐私声明</strong>
+      <p>图片与文档会上传至百度云端识别；Access Token 只存放在 Windows 凭据管理器，永不写入文件或日志。文件不能离开本机时，请选择离线 OCR 工具（如 Umi-OCR）。</p>
+    </div>
+  </div>
+
+  <section id="download" class="download" aria-labelledby="download-title">
+    <div class="wrap">
+      <div class="panel">
+        <h2 id="download-title">现在就试试</h2>
+        <p>下载安装 → 打开 AI Studio 免费领取 Token → 拖入第一份文档。三分钟跑通。</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/wangcheng6-ai/PaddleDesk/releases/latest">下载 PaddleDesk</a>
+          <a class="btn btn-ghost" href="https://aistudio.baidu.com/paddleocr">领取免费 Token</a>
+        </div>
+        <p class="fine">Windows 10/11 · WebView2（Win11 自带）· 签名校验自动更新</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 PaddleDesk contributors · <a href="https://github.com/wangcheng6-ai/PaddleDesk/blob/main/LICENSE">MIT License</a></span>
+    <span>识别能力来自 <a href="https://github.com/PaddlePaddle/PaddleOCR">PaddleOCR</a> 与 <a href="https://aistudio.baidu.com/paddleocr">百度 AI Studio</a>；基于 <a href="https://tauri.app/">Tauri</a> 构建。</span>
+    <span><a href="https://github.com/wangcheng6-ai/PaddleDesk/issues">反馈问题</a> · <a href="https://github.com/wangcheng6-ai/PaddleDesk#readme">文档</a> · <a href="en.html" hreflang="en">English</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
