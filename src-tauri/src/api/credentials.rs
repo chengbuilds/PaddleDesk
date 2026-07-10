@@ -22,6 +22,16 @@ pub fn save_token(token: &str) -> Result<(), OcrError> {
         .map_err(|error| OcrError::Parse(format!("credential store write failed: {error}")))
 }
 
+#[cfg(target_os = "windows")]
+pub fn delete_token() -> Result<(), OcrError> {
+    let entry = keyring::Entry::new(SERVICE, ACCOUNT)
+        .map_err(|error| OcrError::Parse(format!("credential store unavailable: {error}")))?;
+    entry.delete_credential().map_err(|error| match error {
+        keyring::Error::NoEntry => OcrError::Auth,
+        error => OcrError::Parse(format!("credential store delete failed: {error}")),
+    })
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn load_token() -> Result<String, OcrError> {
     Err(OcrError::Auth)
@@ -29,6 +39,13 @@ pub fn load_token() -> Result<String, OcrError> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn save_token(_token: &str) -> Result<(), OcrError> {
+    Err(OcrError::Parse(
+        "Windows Credential Manager is unavailable".into(),
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn delete_token() -> Result<(), OcrError> {
     Err(OcrError::Parse(
         "Windows Credential Manager is unavailable".into(),
     ))

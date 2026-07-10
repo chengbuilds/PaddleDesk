@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -53,6 +54,9 @@ impl BridgeDiagnostic {
 
 fn task_ipc_event(event: &queue::QueueEvent) -> (&'static str, serde_json::Value) {
     match event {
+        queue::QueueEvent::Submitted { task } => {
+            ("task:submitted", serde_json::json!({"task": task}))
+        }
         queue::QueueEvent::Progress {
             id,
             stage,
@@ -140,19 +144,20 @@ fn forward_capture_event(
     store: &Arc<Mutex<storage::Store>>,
     capture_tasks: &Arc<Mutex<HashSet<String>>>,
     event: &queue::QueueEvent,
-) {
+) -> bool {
     let id = match event {
         queue::QueueEvent::Done { id, .. }
         | queue::QueueEvent::Failed { id, .. }
         | queue::QueueEvent::Canceled { id } => id,
-        queue::QueueEvent::Progress { .. } => return,
+        queue::QueueEvent::Submitted { .. } | queue::QueueEvent::Progress { .. } => return false,
     };
+    cleanup_terminal_capture(app, store, id, event);
     let captured = capture_tasks
         .lock()
         .map(|mut tasks| tasks.remove(id))
         .unwrap_or(false);
     if !captured {
-        return;
+        return false;
     }
     let language = store
         .lock()
@@ -188,6 +193,108 @@ fn forward_capture_event(
     if copied {
         let _ = app.emit("capture:done", serde_json::json!({"task_id": id}));
     }
+    true
+}
+
+fn forward_background_notification(
+    app: &tauri::AppHandle,
+    store: &Arc<Mutex<storage::Store>>,
+    event: &queue::QueueEvent,
+) {
+    let (id, succeeded) = match event {
+        queue::QueueEvent::Done { id, .. } => (id, true),
+        queue::QueueEvent::Failed { id, .. } => (id, false),
+        queue::QueueEvent::Submitted { .. }
+        | queue::QueueEvent::Progress { .. }
+        | queue::QueueEvent::Canceled { .. } => return,
+    };
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
+    if focused {
+        return;
+    }
+    let (language, file_name) = store
+        .lock()
+        .ok()
+        .map(|store| {
+            let language = store
+                .get_setting("language")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "system".into());
+            let file_name = store
+                .task_input_path(id)
+                .ok()
+                .flatten()
+                .and_then(|path| {
+                    PathBuf::from(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| id.clone());
+            (language, file_name)
+        })
+        .unwrap_or_else(|| ("system".into(), id.clone()));
+    let copy = native::native_copy(native::native_locale(&language));
+    let status = if succeeded {
+        copy.task_done
+    } else {
+        copy.task_failed
+    };
+    if let Err(error) = app
+        .notification()
+        .builder()
+        .title(copy.task_notification_title)
+        .body(format!("{status}: {file_name}"))
+        .show()
+    {
+        eprintln!("PaddleDesk task notification: {error}");
+    }
+}
+
+fn cleanup_terminal_capture(
+    app: &tauri::AppHandle,
+    store: &Arc<Mutex<storage::Store>>,
+    id: &str,
+    event: &queue::QueueEvent,
+) {
+    let path = {
+        let store = match store.lock() {
+            Ok(store) => store,
+            Err(_) => {
+                eprintln!("PaddleDesk capture cleanup: store lock poisoned");
+                return;
+            }
+        };
+        match terminal_capture_path(&store, id, event) {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                eprintln!("PaddleDesk capture cleanup: {error}");
+                return;
+            }
+        }
+    };
+    if let Err(error) = capture::remove_managed(app, &path) {
+        eprintln!("PaddleDesk capture cleanup: {error}");
+    }
+}
+
+fn terminal_capture_path(
+    store: &storage::Store,
+    id: &str,
+    event: &queue::QueueEvent,
+) -> Result<Option<PathBuf>, String> {
+    if !matches!(event, queue::QueueEvent::Canceled { .. }) {
+        return Ok(None);
+    }
+    store
+        .task_input_path(id)
+        .map(|path| path.map(PathBuf::from))
+        .map_err(|error| error.to_string())
 }
 
 fn real_services(
@@ -262,30 +369,64 @@ fn spawn_event_bridge(
                 |name, payload| app_handle.emit(name, payload).map_err(|_| ()),
                 report_bridge_diagnostic,
             );
-            forward_capture_event(&app_handle, &store, &capture_tasks, &event);
+            let captured = forward_capture_event(&app_handle, &store, &capture_tasks, &event);
+            if !captured {
+                forward_background_notification(&app_handle, &store, &event);
+            }
         }
     });
 }
 
+fn selected_data_dir(default: PathBuf, test_override: Option<String>) -> PathBuf {
+    test_override
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(default)
+}
+
+pub(crate) fn runtime_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let default = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    #[cfg(debug_assertions)]
+    let test_override = std::env::var("PADDLEDESK_TEST_DATA_DIR").ok();
+    #[cfg(not(debug_assertions))]
+    let test_override = None;
+    Ok(selected_data_dir(default, test_override))
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = app.path().app_data_dir()?;
+    let data_dir = runtime_data_dir(app.handle()).map_err(std::io::Error::other)?;
     std::fs::create_dir_all(&data_dir)?;
     let store = Arc::new(Mutex::new(storage::Store::open(
         &data_dir.join("paddledesk.db"),
     )?));
-    let (persist_results, concurrency, language, autostart) = {
+    let (persist_results, concurrency, language, autostart, retained_paths, hotkey) = {
         let store = store
             .lock()
             .map_err(|_| std::io::Error::other("store lock poisoned"))?;
+        store.cleanup_previous_session_tasks()?;
         (
-            store.get_setting("privacy_mode")?.as_deref() != Some("1"),
+            store.get_setting("save_history")?.as_deref() != Some("0"),
             startup_concurrency(&store)?,
             store
                 .get_setting("language")?
                 .unwrap_or_else(|| "system".into()),
             store.get_setting("autostart")?.as_deref() == Some("1"),
+            store
+                .retained_source_paths()?
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<HashSet<_>>(),
+            store
+                .get_setting("screenshot_hotkey")?
+                .unwrap_or_else(|| capture::desktop::SCREENSHOT_SHORTCUT.into()),
         )
     };
+    if let Err(error) = capture::cleanup_stale(app.handle(), &retained_paths) {
+        eprintln!("PaddleDesk capture cleanup: {error}");
+    }
     let token: api::paddle::TokenProvider = Arc::new(api::credentials::load_token);
     let proxy = proxy_provider(store.clone());
     let (event_sender, event_receiver) = mpsc::unbounded_channel();
@@ -306,8 +447,15 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     capture::desktop::setup_tray(app, &language)?;
     capture::desktop::set_autostart(app.handle(), autostart)?;
-    app.global_shortcut()
-        .register(capture::desktop::SCREENSHOT_SHORTCUT)?;
+    let registration_hotkey = hotkey.replace("Win", "Super");
+    let hotkey_result = app.global_shortcut().register(registration_hotkey.as_str());
+    if let Ok(store) = store.lock() {
+        let available = if hotkey_result.is_ok() { "1" } else { "0" };
+        let _ = store.set_setting("screenshot_hotkey_available", available);
+    }
+    if let Err(error) = hotkey_result {
+        eprintln!("PaddleDesk screenshot hotkey unavailable: {error}");
+    }
     spawn_event_bridge(app.handle().clone(), store, capture_tasks, event_receiver);
     queue.resume();
     Ok(())
@@ -355,11 +503,20 @@ pub fn run() {
             commands::get_result,
             commands::get_task_source,
             commands::export_result,
+            commands::list_results,
+            commands::delete_result,
+            commands::clear_results,
+            commands::dismiss_failed_task,
             commands::search_history,
             commands::get_usage,
             commands::get_settings,
             commands::set_settings,
             commands::validate_token,
+            commands::get_credential_status,
+            commands::reveal_token,
+            commands::delete_token,
+            commands::get_screenshot_hotkey,
+            commands::set_screenshot_hotkey,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -371,8 +528,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        model::{OcrError, RecognitionResult},
+        model::{OcrError, RecognitionResult, ServiceId},
         queue::QueueEvent,
+        storage::{NewTask, Store},
     };
 
     fn empty_result() -> RecognitionResult {
@@ -381,6 +539,81 @@ mod tests {
             page_count: 0,
             pages: Vec::new(),
         }
+    }
+
+    #[test]
+    fn terminal_capture_policy_preserves_results_and_failed_retry_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("policy.db")).unwrap();
+        for (id, persist_result) in [
+            ("persisted", true),
+            ("private", false),
+            ("failed", true),
+            ("canceled", true),
+        ] {
+            store
+                .insert_task(
+                    &NewTask {
+                        id: id.into(),
+                        service: ServiceId::Vl16,
+                        input_path: format!("{id}.png"),
+                        options_json: "{}".into(),
+                    },
+                    persist_result,
+                )
+                .unwrap();
+        }
+        store
+            .save_result("persisted", "persisted.png", &empty_result())
+            .unwrap();
+
+        assert_eq!(
+            terminal_capture_path(
+                &store,
+                "persisted",
+                &QueueEvent::Done {
+                    id: "persisted".into(),
+                    result: empty_result(),
+                },
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            terminal_capture_path(
+                &store,
+                "private",
+                &QueueEvent::Done {
+                    id: "private".into(),
+                    result: empty_result(),
+                },
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            terminal_capture_path(
+                &store,
+                "failed",
+                &QueueEvent::Failed {
+                    id: "failed".into(),
+                    error: OcrError::Auth,
+                },
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            terminal_capture_path(
+                &store,
+                "canceled",
+                &QueueEvent::Canceled {
+                    id: "canceled".into(),
+                },
+            )
+            .unwrap(),
+            Some(PathBuf::from("canceled.png"))
+        );
     }
 
     #[test]
@@ -559,6 +792,20 @@ mod tests {
         ] {
             assert_eq!(services.get(&id).unwrap().id(), id);
         }
+    }
+
+    #[test]
+    fn debug_test_data_directory_override_is_explicit_and_ignores_empty_values() {
+        let default = PathBuf::from("default-data");
+        assert_eq!(selected_data_dir(default.clone(), None), default);
+        assert_eq!(
+            selected_data_dir(default.clone(), Some("  ".into())),
+            default
+        );
+        assert_eq!(
+            selected_data_dir(default, Some("isolated-test-data".into())),
+            PathBuf::from("isolated-test-data")
+        );
     }
 
     #[test]

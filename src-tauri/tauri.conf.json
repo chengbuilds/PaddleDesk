@@ -13,12 +13,15 @@
     "windows": [
       {
         "title": "PaddleDesk",
-        "width": 800,
-        "height": 600
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 660,
+        "center": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; worker-src 'self' blob:"
     }
   },
   "bundle": {

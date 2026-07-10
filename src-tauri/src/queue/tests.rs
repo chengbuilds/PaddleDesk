@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Barrier, Mutex, TryLockError,
     },
     time::Duration,
@@ -25,7 +25,7 @@ async fn terminal(rx: &mut mpsc::UnboundedReceiver<QueueEvent>) -> QueueEvent {
                 event @ (QueueEvent::Done { .. }
                 | QueueEvent::Failed { .. }
                 | QueueEvent::Canceled { .. }) => return event,
-                QueueEvent::Progress { .. } => {}
+                QueueEvent::Submitted { .. } | QueueEvent::Progress { .. } => {}
             }
         }
     })
@@ -101,7 +101,8 @@ async fn setup_service_with_persistence(
 }
 
 fn assert_resume_claim_handshake(q: &Arc<Queue>, store: &Arc<Mutex<Store>>) {
-    q.active.lock().unwrap().insert("old".into());
+    let (cancel, _) = tokio::sync::watch::channel(false);
+    q.active.lock().unwrap().insert("old".into(), cancel);
     let snapshot_guard = store.lock().unwrap();
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
     let release = Arc::new(Barrier::new(2));
@@ -149,6 +150,7 @@ fn assert_resume_claim_handshake(q: &Arc<Queue>, store: &Arc<Mutex<Store>>) {
 struct TrackingOcr {
     active: Arc<AtomicU32>,
     max_active: Arc<AtomicU32>,
+    release: tokio::sync::watch::Receiver<bool>,
 }
 
 struct CallbackStalledOcr {
@@ -158,6 +160,37 @@ struct CallbackStalledOcr {
 struct FailOnceAfterRelease {
     release_first: Arc<tokio::sync::Notify>,
     calls: AtomicU32,
+}
+
+struct CancelAwareOcr {
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<AtomicBool>,
+}
+
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl OcrService for CancelAwareOcr {
+    fn id(&self) -> ServiceId {
+        ServiceId::Vl16
+    }
+
+    async fn parse(
+        &self,
+        _input: &InputDoc,
+        _options: &ParseOptions,
+        _progress: ProgressFn,
+    ) -> Result<RecognitionResult, OcrError> {
+        let _drop_flag = DropFlag(Arc::clone(&self.dropped));
+        self.started.notify_one();
+        std::future::pending().await
+    }
 }
 
 #[async_trait::async_trait]
@@ -217,7 +250,8 @@ impl OcrService for TrackingOcr {
     ) -> Result<RecognitionResult, OcrError> {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(active, Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        let mut release = self.release.clone();
+        release.wait_for(|released| *released).await.unwrap();
         self.active.fetch_sub(1, Ordering::SeqCst);
         progress(1, 1);
         Ok(RecognitionResult {
@@ -236,7 +270,8 @@ async fn retries_then_succeeds() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     match terminal(&mut rx).await {
         QueueEvent::Done { id, .. } => assert_eq!(id, "t1"),
         _ => panic!("task should succeed"),
@@ -254,7 +289,8 @@ async fn exhausted_network_error_retries_three_times_then_fails() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     match terminal(&mut rx).await {
         QueueEvent::Failed {
             error: OcrError::Network(message),
@@ -282,7 +318,8 @@ async fn progress_success_result_and_usage_stay_in_sync() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     let (uploading, processing) = timeout(TEST_TIMEOUT, async {
         let (mut uploading, mut processing) = (false, false);
         loop {
@@ -290,7 +327,7 @@ async fn progress_success_result_and_usage_stay_in_sync() {
                 QueueEvent::Progress { stage, .. } if stage == "uploading" => uploading = true,
                 QueueEvent::Progress { stage, .. } if stage == "processing" => processing = true,
                 QueueEvent::Done { .. } => return (uploading, processing),
-                QueueEvent::Progress { .. } => {}
+                QueueEvent::Submitted { .. } | QueueEvent::Progress { .. } => {}
                 _ => panic!("task should succeed"),
             }
         }
@@ -309,12 +346,14 @@ async fn progress_success_result_and_usage_stay_in_sync() {
 async fn disabled_result_persistence_keeps_lifecycle_without_history() {
     let (queue, store, mut events) =
         setup_service_with_persistence(Arc::new(MockOcr::new()), 1, false).await;
-    queue.submit(NewTask {
-        id: "private".into(),
-        service: ServiceId::Vl16,
-        input_path: "sensitive.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "private".into(),
+            service: ServiceId::Vl16,
+            input_path: "sensitive.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
 
     let (uploading, processing) = timeout(TEST_TIMEOUT, async {
         let (mut uploading, mut processing) = (false, false);
@@ -326,7 +365,7 @@ async fn disabled_result_persistence_keeps_lifecycle_without_history() {
                     assert_eq!(id, "private");
                     return (uploading, processing);
                 }
-                QueueEvent::Progress { .. } => {}
+                QueueEvent::Submitted { .. } | QueueEvent::Progress { .. } => {}
                 _ => panic!("private task should succeed"),
             }
         }
@@ -346,12 +385,14 @@ async fn disabled_result_persistence_keeps_lifecycle_without_history() {
 async fn privacy_policy_is_snapshotted_when_each_task_is_admitted() {
     let (queue, store, mut events) =
         setup_service_with_persistence(Arc::new(MockOcr::new()), 0, false).await;
-    queue.submit(NewTask {
-        id: "private".into(),
-        service: ServiceId::Vl16,
-        input_path: "private.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "private".into(),
+            service: ServiceId::Vl16,
+            input_path: "private.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
 
     queue.set_persist_results(true);
     queue.semaphore.add_permits(1);
@@ -366,12 +407,14 @@ async fn privacy_policy_is_snapshotted_when_each_task_is_admitted() {
         .unwrap()
         .is_none());
 
-    queue.submit(NewTask {
-        id: "public".into(),
-        service: ServiceId::Vl16,
-        input_path: "public.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "public".into(),
+            service: ServiceId::Vl16,
+            input_path: "public.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
     assert!(matches!(
         terminal(&mut events).await,
         QueueEvent::Done { id, .. } if id == "public"
@@ -395,12 +438,14 @@ async fn settings_commit_before_task_insert_controls_privacy_snapshot() {
         *queue.submit_probe.lock().unwrap() = Some((entered_tx, release.clone()));
         let submit_queue = queue.clone();
         let submit = tokio::spawn(async move {
-            submit_queue.submit(NewTask {
-                id: "private-after-commit".into(),
-                service: ServiceId::Vl16,
-                input_path: "private.png".into(),
-                options_json: "{}".into(),
-            });
+            submit_queue
+                .submit(NewTask {
+                    id: "private-after-commit".into(),
+                    service: ServiceId::Vl16,
+                    input_path: "private.png".into(),
+                    options_json: "{}".into(),
+                })
+                .unwrap();
         });
         entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
         store_guard
@@ -427,7 +472,8 @@ async fn auth_error_fails_immediately_no_retry() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     match terminal(&mut rx).await {
         QueueEvent::Failed {
             error: OcrError::Auth,
@@ -448,7 +494,8 @@ async fn quota_error_fails_immediately_no_retry() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     match terminal(&mut rx).await {
         QueueEvent::Failed {
             error: OcrError::Quota,
@@ -463,12 +510,14 @@ async fn quota_error_fails_immediately_no_retry() {
 async fn manual_retry_only_restarts_requested_failed_task() {
     let (queue, store, mut events) = setup(MockOcr::failing(2, OcrError::Auth), 1).await;
     for id in ["retry-me", "leave-failed"] {
-        queue.submit(NewTask {
-            id: id.into(),
-            service: ServiceId::Vl16,
-            input_path: format!("{id}.png"),
-            options_json: "{}".into(),
-        });
+        queue
+            .submit(NewTask {
+                id: id.into(),
+                service: ServiceId::Vl16,
+                input_path: format!("{id}.png"),
+                options_json: "{}".into(),
+            })
+            .unwrap();
     }
     for _ in 0..2 {
         assert!(matches!(
@@ -502,12 +551,14 @@ async fn failed_event_is_published_only_after_immediate_retry_is_safe() {
         1,
     )
     .await;
-    queue.submit(NewTask {
-        id: "retry-now".into(),
-        service: ServiceId::Vl16,
-        input_path: "retry.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "retry-now".into(),
+            service: ServiceId::Vl16,
+            input_path: "retry.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
     wait_for_stage(&mut events, "uploading").await;
 
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
@@ -527,7 +578,7 @@ async fn failed_event_is_published_only_after_immediate_retry_is_safe() {
         terminal(&mut events).await,
         QueueEvent::Failed { id, .. } if id == "retry-now"
     ));
-    assert!(!queue.active.lock().unwrap().contains("retry-now"));
+    assert!(!queue.active.lock().unwrap().contains_key("retry-now"));
     queue.retry("retry-now").unwrap();
     assert!(matches!(
         terminal(&mut events).await,
@@ -541,12 +592,14 @@ async fn retry_from_failed_poll_window_always_starts_a_worker() {
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
     let release = Arc::new(Barrier::new(2));
     *queue.terminal_probe.lock().unwrap() = Some((entered_tx, release.clone()));
-    queue.submit(NewTask {
-        id: "retry-from-poll".into(),
-        service: ServiceId::Vl16,
-        input_path: "retry.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "retry-from-poll".into(),
+            service: ServiceId::Vl16,
+            input_path: "retry.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
 
     entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     assert_eq!(
@@ -587,12 +640,14 @@ async fn canceled_is_last_when_cancel_races_persisted_failure() {
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
     let release = Arc::new(Barrier::new(2));
     *queue.terminal_probe.lock().unwrap() = Some((entered_tx, release.clone()));
-    queue.submit(NewTask {
-        id: "cancel-failed".into(),
-        service: ServiceId::Vl16,
-        input_path: "failed.png".into(),
-        options_json: "{}".into(),
-    });
+    queue
+        .submit(NewTask {
+            id: "cancel-failed".into(),
+            service: ServiceId::Vl16,
+            input_path: "failed.png".into(),
+            options_json: "{}".into(),
+        })
+        .unwrap();
     entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let failed = store.lock().unwrap().list_tasks(Some("failed")).unwrap();
     assert_eq!(failed.len(), 1);
@@ -623,7 +678,8 @@ async fn cancel_emits_terminal_event_and_persists_status() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     q.cancel("t1");
     let event = terminal(&mut rx).await;
     assert_eq!(
@@ -654,7 +710,8 @@ async fn canceled_is_last_event_after_accepted_progress() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     wait_for_stage(&mut rx, "uploading").await;
 
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
@@ -691,7 +748,8 @@ async fn cancellation_cannot_be_overwritten_by_running_worker() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     wait_for_stage(&mut rx, "uploading").await;
     q.cancel("t1");
     match terminal(&mut rx).await {
@@ -707,6 +765,76 @@ async fn cancellation_cannot_be_overwritten_by_running_worker() {
 }
 
 #[tokio::test]
+async fn cancel_aborts_running_service() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let (q, _store, mut rx) = setup_service(
+        Arc::new(CancelAwareOcr {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        }),
+        1,
+    )
+    .await;
+    q.submit(NewTask {
+        id: "cancel-running".into(),
+        service: ServiceId::Vl16,
+        input_path: "a.png".into(),
+        options_json: "{}".into(),
+    })
+    .unwrap();
+    timeout(TEST_TIMEOUT, started.notified()).await.unwrap();
+
+    q.cancel("cancel-running");
+
+    assert!(matches!(
+        terminal(&mut rx).await,
+        QueueEvent::Canceled { id } if id == "cancel-running"
+    ));
+    timeout(TEST_TIMEOUT, async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("OCR future was not dropped after cancellation");
+}
+
+#[tokio::test]
+async fn cancel_before_worker_subscribes_releases_active_task() {
+    let (q, _store, mut rx) = setup(MockOcr::new(), 0).await;
+    q.submit(NewTask {
+        id: "cancel-before-worker".into(),
+        service: ServiceId::Vl16,
+        input_path: "a.png".into(),
+        options_json: "{}".into(),
+    })
+    .unwrap();
+
+    q.cancel("cancel-before-worker");
+
+    assert!(matches!(
+        terminal(&mut rx).await,
+        QueueEvent::Canceled { id } if id == "cancel-before-worker"
+    ));
+    timeout(TEST_TIMEOUT, async {
+        loop {
+            if !q
+                .active
+                .lock()
+                .unwrap()
+                .contains_key("cancel-before-worker")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("canceled task stayed active before worker subscription");
+}
+
+#[tokio::test]
 async fn submit_and_repeated_resume_start_only_one_worker() {
     let svc = MockOcr::new();
     let probe = svc.clone();
@@ -716,7 +844,8 @@ async fn submit_and_repeated_resume_start_only_one_worker() {
         service: ServiceId::Vl16,
         input_path: "a.png".into(),
         options_json: "{}".into(),
-    });
+    })
+    .unwrap();
     q.resume();
     q.resume();
     match terminal(&mut rx).await {
@@ -756,9 +885,11 @@ async fn resume_claim_waits_for_active_cleanup_before_snapshot() {
 #[tokio::test]
 async fn semaphore_limits_parallel_service_calls() {
     let max_active = Arc::new(AtomicU32::new(0));
+    let (release, released) = tokio::sync::watch::channel(false);
     let service = TrackingOcr {
         active: Arc::new(AtomicU32::new(0)),
         max_active: max_active.clone(),
+        release: released,
     };
     let (q, _store, mut rx) = setup_service(Arc::new(service), 2).await;
     for index in 0..4 {
@@ -767,8 +898,18 @@ async fn semaphore_limits_parallel_service_calls() {
             service: ServiceId::Vl16,
             input_path: "a.png".into(),
             options_json: "{}".into(),
-        });
+        })
+        .unwrap();
     }
+    timeout(TEST_TIMEOUT, async {
+        while max_active.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queue did not fill both semaphore permits");
+    assert_eq!(max_active.load(Ordering::SeqCst), 2);
+    release.send_replace(true);
     for _ in 0..4 {
         assert!(matches!(terminal(&mut rx).await, QueueEvent::Done { .. }));
     }
@@ -823,4 +964,36 @@ async fn resume_can_start_worker_outside_a_tokio_context() {
         QueueEvent::Done { id, .. } => assert_eq!(id, "old"),
         _ => panic!("resumed task should succeed"),
     }
+}
+
+#[tokio::test]
+async fn non_persistent_results_live_only_in_the_queue_session_cache() {
+    let (q, store, mut rx) =
+        setup_service_with_persistence(Arc::new(MockOcr::new()), 1, false).await;
+    q.submit(NewTask {
+        id: "session-result".into(),
+        service: ServiceId::Vl16,
+        input_path: "session.png".into(),
+        options_json: "{}".into(),
+    })
+    .unwrap();
+    let expected = match terminal(&mut rx).await {
+        QueueEvent::Done { result, .. } => result,
+        _ => panic!("task should succeed"),
+    };
+
+    assert!(store
+        .lock()
+        .unwrap()
+        .get_result("session-result")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        q.get_result("session-result")
+            .unwrap()
+            .expect("session result missing"),
+        expected
+    );
+    assert!(q.remove_session_result("session-result").unwrap());
+    assert!(q.get_result("session-result").unwrap().is_none());
 }

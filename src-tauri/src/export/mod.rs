@@ -12,7 +12,6 @@ pub fn export(
             .pages
             .iter()
             .flat_map(|page| &page.blocks)
-            .filter(|block| block.kind == BlockKind::Text)
             .map(|block| block.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n")
@@ -71,8 +70,11 @@ mod tests {
     }
 
     #[test]
-    fn txt_export_joins_text_blocks() {
-        assert_eq!(export(&sample(), "txt", None).unwrap(), "你好".as_bytes());
+    fn txt_export_joins_every_readable_block() {
+        assert_eq!(
+            export(&sample(), "txt", None).unwrap(),
+            "你好\n\na,b\n1,2".as_bytes()
+        );
     }
 
     #[test]

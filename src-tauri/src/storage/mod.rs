@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::model::{OcrError, Page, RecognitionResult, ServiceId};
 
 const TASK_COLUMNS: &str = "id, service, status, input_path, options_json, \
-                            progress_page, total_pages, error_kind, error_msg, created_at";
+                            progress_page, total_pages, error_kind, error_msg, created_at, batch_id";
 
 pub struct Store(rusqlite::Connection);
 
@@ -37,15 +37,20 @@ pub struct TaskRow {
     pub error_kind: Option<String>,
     pub error_msg: Option<String>,
     pub created_at: i64,
+    pub batch_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HistoryRow {
+pub struct ResultSummary {
     pub task_id: String,
+    pub service: ServiceId,
     pub file_name: String,
     pub snippet: String,
     pub created_at: i64,
+    pub temporary: bool,
 }
+
+pub type HistoryRow = ResultSummary;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UsageRow {
@@ -66,7 +71,8 @@ impl Store {
                progress_page INTEGER NOT NULL DEFAULT 0, total_pages INTEGER NOT NULL DEFAULT 0,
                error_kind TEXT, error_msg TEXT,
                persist_result INTEGER NOT NULL DEFAULT 0,
-               upstream_job_ids_json TEXT NOT NULL DEFAULT '[]');
+               upstream_job_ids_json TEXT NOT NULL DEFAULT '[]',
+               batch_id TEXT);
              CREATE TABLE IF NOT EXISTS results(
                task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
                markdown TEXT NOT NULL, blocks_json TEXT NOT NULL, page_count INTEGER NOT NULL);
@@ -79,21 +85,33 @@ impl Store {
         )?;
         ensure_persist_result_column(&connection)?;
         ensure_upstream_job_ids_column(&connection)?;
+        ensure_batch_id_column(&connection)?;
+        migrate_save_history(&connection)?;
         Ok(Store(connection))
     }
 
     pub fn insert_task(&self, task: &NewTask, persist_result: bool) -> Result<()> {
+        self.insert_task_in_batch(task, persist_result, None)
+    }
+
+    pub fn insert_task_in_batch(
+        &self,
+        task: &NewTask,
+        persist_result: bool,
+        batch_id: Option<&str>,
+    ) -> Result<()> {
         self.0.execute(
             "INSERT INTO tasks(
-               id, created_at, service, input_path, options_json, persist_result
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+               id, created_at, service, input_path, options_json, persist_result, batch_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 task.id,
                 Local::now().timestamp(),
                 service_name(task.service),
                 task.input_path,
                 task.options_json,
-                persist_result
+                persist_result,
+                batch_id
             ],
         )?;
         Ok(())
@@ -217,11 +235,16 @@ impl Store {
         }
     }
 
+    pub fn task(&self, id: &str) -> Result<Option<TaskRow>> {
+        let sql = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?1");
+        Ok(self.0.query_row(&sql, [id], task_row).optional()?)
+    }
+
     pub(crate) fn unfinished_tasks(&self) -> Result<Vec<AdmittedTask>> {
         let mut statement = self.0.prepare(
             "SELECT id, service, input_path, options_json, persist_result,
                     upstream_job_ids_json FROM tasks
-             WHERE status NOT IN ('done','canceled')",
+             WHERE status IN ('pending','uploading','processing')",
         )?;
         let rows = statement.query_map([], |row| {
             Ok(AdmittedTask {
@@ -318,22 +341,142 @@ impl Store {
             .optional()?)
     }
 
-    pub fn search_history(&self, query: &str) -> Result<Vec<HistoryRow>> {
-        let mut statement = self.0.prepare(
-            "SELECT history_fts.task_id, history_fts.file_name,
-                    snippet(history_fts, 2, '', '', '…', 12), tasks.created_at
-             FROM history_fts JOIN tasks ON tasks.id = history_fts.task_id
-             WHERE history_fts MATCH ?1 ORDER BY tasks.created_at DESC",
-        )?;
-        let query = format!("{query}*");
-        let rows = statement.query_map([query], |row| {
-            Ok(HistoryRow {
+    pub fn list_results(&self, service: ServiceId, query: &str) -> Result<Vec<ResultSummary>> {
+        let (sql, fts_query) = if query.trim().is_empty() {
+            (
+                "SELECT history_fts.task_id, tasks.service, history_fts.file_name,
+                        substr(history_fts.markdown, 1, 160), tasks.created_at
+                 FROM history_fts JOIN tasks ON tasks.id = history_fts.task_id
+                 WHERE tasks.service = ?1
+                 ORDER BY tasks.created_at DESC, tasks.rowid DESC",
+                None,
+            )
+        } else {
+            (
+                "SELECT history_fts.task_id, tasks.service, history_fts.file_name,
+                        snippet(history_fts, 2, '', '', '…', 12), tasks.created_at
+                 FROM history_fts JOIN tasks ON tasks.id = history_fts.task_id
+                 WHERE tasks.service = ?1 AND history_fts MATCH ?2
+                 ORDER BY tasks.created_at DESC, tasks.rowid DESC",
+                Some(fts_prefix_query(query.trim())),
+            )
+        };
+        let mut statement = self.0.prepare(sql)?;
+        let map = |row: &Row<'_>| {
+            Ok(ResultSummary {
                 task_id: row.get(0)?,
-                file_name: row.get(1)?,
-                snippet: row.get(2)?,
-                created_at: row.get(3)?,
+                service: service_from_str(1, row.get(1)?)?,
+                file_name: row.get(2)?,
+                snippet: row.get(3)?,
+                created_at: row.get(4)?,
+                temporary: false,
             })
-        })?;
+        };
+        let rows = match fts_query {
+            Some(query) => statement.query_map(params![service_name(service), query], map)?,
+            None => statement.query_map([service_name(service)], map)?,
+        };
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn search_history(&self, query: &str) -> Result<Vec<ResultSummary>> {
+        let mut results = Vec::new();
+        for service in [ServiceId::Vl16, ServiceId::PpOcrV6, ServiceId::StructureV3] {
+            results.extend(self.list_results(service, query)?);
+        }
+        results.sort_by_key(|result| std::cmp::Reverse(result.created_at));
+        Ok(results)
+    }
+
+    pub fn delete_result_task(&self, task_id: &str) -> Result<Option<String>> {
+        let transaction = self.0.unchecked_transaction()?;
+        let input_path = transaction
+            .query_row(
+                "SELECT input_path FROM tasks WHERE id = ?1 AND status = 'done'",
+                [task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(input_path) = input_path else {
+            transaction.rollback()?;
+            return Ok(None);
+        };
+        transaction.execute("DELETE FROM history_fts WHERE task_id = ?1", [task_id])?;
+        transaction.execute("DELETE FROM tasks WHERE id = ?1", [task_id])?;
+        transaction.commit()?;
+        Ok(Some(input_path))
+    }
+
+    pub fn clear_results(&self, service: ServiceId) -> Result<Vec<String>> {
+        let transaction = self.0.unchecked_transaction()?;
+        let input_paths = {
+            let mut statement = transaction
+                .prepare("SELECT input_path FROM tasks WHERE service = ?1 AND status = 'done'")?;
+            let rows = statement.query_map([service_name(service)], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        transaction.execute(
+            "DELETE FROM history_fts WHERE task_id IN
+             (SELECT id FROM tasks WHERE service = ?1 AND status = 'done')",
+            [service_name(service)],
+        )?;
+        transaction.execute(
+            "DELETE FROM tasks WHERE service = ?1 AND status = 'done'",
+            [service_name(service)],
+        )?;
+        transaction.commit()?;
+        Ok(input_paths)
+    }
+
+    pub fn dismiss_failed_task(&self, task_id: &str) -> Result<Option<String>> {
+        let transaction = self.0.unchecked_transaction()?;
+        let input_path = transaction
+            .query_row(
+                "SELECT input_path FROM tasks WHERE id = ?1 AND status = 'failed'",
+                [task_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if input_path.is_some() {
+            transaction.execute("DELETE FROM tasks WHERE id = ?1", [task_id])?;
+        }
+        transaction.commit()?;
+        Ok(input_path)
+    }
+
+    pub fn cleanup_previous_session_tasks(&self) -> Result<Vec<String>> {
+        let transaction = self.0.unchecked_transaction()?;
+        let paths = {
+            let mut statement = transaction.prepare(
+                "SELECT input_path FROM tasks
+                 WHERE status = 'canceled' OR (status = 'done' AND persist_result = 0)",
+            )?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        transaction.execute(
+            "DELETE FROM history_fts WHERE task_id IN
+             (SELECT id FROM tasks
+              WHERE status = 'canceled' OR (status = 'done' AND persist_result = 0))",
+            [],
+        )?;
+        transaction.execute(
+            "DELETE FROM tasks
+             WHERE status = 'canceled' OR (status = 'done' AND persist_result = 0)",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(paths)
+    }
+
+    pub fn retained_source_paths(&self) -> Result<Vec<String>> {
+        let mut statement = self.0.prepare(
+            "SELECT input_path FROM tasks
+             WHERE status IN ('pending','uploading','processing','failed')
+                OR (status = 'done' AND persist_result = 1
+                    AND EXISTS (SELECT 1 FROM results WHERE results.task_id = tasks.id))",
+        )?;
+        let rows = statement.query_map([], |row| row.get(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -407,7 +550,40 @@ fn ensure_persist_result_column(connection: &Connection) -> Result<()> {
             "ALTER TABLE tasks ADD COLUMN persist_result INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
+        let save_history = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'save_history'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let save_unfinished = match save_history {
+            Some(value) => value != "0",
+            None => {
+                connection
+                    .query_row(
+                        "SELECT value FROM settings WHERE key = 'privacy_mode'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .as_deref()
+                    != Some("1")
+            }
+        };
+        connection.execute(
+            "UPDATE tasks SET persist_result = ?1
+             WHERE status IN ('pending','uploading','processing','failed')",
+            [i64::from(save_unfinished)],
+        )?;
     }
+    // A stored result is authoritative evidence that this task is persistent. This also
+    // repairs databases opened by intermediate builds that added the column with zero.
+    connection.execute(
+        "UPDATE tasks SET persist_result = 1
+         WHERE EXISTS (SELECT 1 FROM results WHERE results.task_id = tasks.id)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -424,6 +600,73 @@ fn ensure_upstream_job_ids_column(connection: &Connection) -> Result<()> {
             [],
         )?;
     }
+    Ok(())
+}
+
+fn ensure_batch_id_column(connection: &Connection) -> Result<()> {
+    let mut statement = connection.prepare("PRAGMA table_info(tasks)")?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column? == "batch_id" {
+            return Ok(());
+        }
+    }
+    connection.execute("ALTER TABLE tasks ADD COLUMN batch_id TEXT", [])?;
+    Ok(())
+}
+
+fn migrate_save_history(connection: &Connection) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    let save_history = transaction
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'save_history'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if save_history.is_none() {
+        let privacy_mode = transaction
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'privacy_mode'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let value = if privacy_mode.as_deref() == Some("1") {
+            "0"
+        } else {
+            "1"
+        };
+        transaction.execute(
+            "INSERT INTO settings(key, value) VALUES ('save_history', ?1)",
+            [value],
+        )?;
+    }
+    transaction.execute("DELETE FROM settings WHERE key = 'privacy_mode'", [])?;
+    let current_service = transaction
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'current_service'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if current_service.is_none() {
+        if let Some(default_service) = transaction
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'default_service'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            transaction.execute(
+                "INSERT INTO settings(key, value) VALUES ('current_service', ?1)",
+                [default_service],
+            )?;
+        }
+    }
+    transaction.execute("DELETE FROM settings WHERE key = 'default_service'", [])?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -497,6 +740,7 @@ fn task_row(row: &Row<'_>) -> rusqlite::Result<TaskRow> {
         error_kind: row.get(7)?,
         error_msg: row.get(8)?,
         created_at: row.get(9)?,
+        batch_id: row.get(10)?,
     })
 }
 
@@ -518,6 +762,10 @@ fn error_fields(error: &OcrError) -> (&'static str, Option<String>) {
         OcrError::Server(detail) => ("server", Some(detail.clone())),
         OcrError::Parse(detail) => ("parse", Some(detail.clone())),
     }
+}
+
+fn fts_prefix_query(query: &str) -> String {
+    format!("\"{}\"*", query.replace('"', "\"\""))
 }
 
 #[cfg(test)]
@@ -560,6 +808,30 @@ mod tests {
             .unwrap();
         assert_eq!(s.unfinished_tasks().unwrap().len(), 1);
         s.update_status("t1", "done", None, None).unwrap();
+        assert!(s.unfinished_tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_tasks_are_not_unfinished() {
+        let (_d, s) = tmp_store();
+        s.insert_task(
+            &NewTask {
+                id: "failed".into(),
+                service: ServiceId::Vl16,
+                input_path: "failed.pdf".into(),
+                options_json: "{}".into(),
+            },
+            true,
+        )
+        .unwrap();
+        s.update_status(
+            "failed",
+            "failed",
+            None,
+            Some(&OcrError::Parse("bad response".into())),
+        )
+        .unwrap();
+
         assert!(s.unfinished_tasks().unwrap().is_empty());
     }
 
@@ -725,6 +997,35 @@ mod tests {
     }
 
     #[test]
+    fn search_history_quotes_fts_punctuation() {
+        let (_d, s) = tmp_store();
+        s.insert_task(
+            &NewTask {
+                id: "punctuation".into(),
+                service: ServiceId::Vl16,
+                input_path: "notes.md".into(),
+                options_json: "{}".into(),
+            },
+            true,
+        )
+        .unwrap();
+        s.save_result(
+            "punctuation",
+            "notes.md",
+            &RecognitionResult {
+                markdown: "C++ foo-bar quote\"".into(),
+                page_count: 1,
+                pages: vec![],
+            },
+        )
+        .unwrap();
+
+        for query in ["C++", "foo-bar", "quote\""] {
+            assert_eq!(s.search_history(query).unwrap().len(), 1, "query: {query}");
+        }
+    }
+
+    #[test]
     fn usage_accumulates_and_settings_roundtrip() {
         let (_d, s) = tmp_store();
         let today = chrono::Local::now().date_naive().to_string();
@@ -738,6 +1039,7 @@ mod tests {
             s.get_settings().unwrap(),
             std::collections::HashMap::from([
                 ("proxy_mode".to_string(), "direct".to_string()),
+                ("save_history".to_string(), "1".to_string()),
                 ("theme".to_string(), "dark".to_string()),
             ])
         );
@@ -758,7 +1060,10 @@ mod tests {
         ]);
 
         assert!(s.set_settings(&settings).is_err());
-        assert!(s.get_settings().unwrap().is_empty());
+        assert_eq!(
+            s.get_settings().unwrap(),
+            HashMap::from([("save_history".to_string(), "1".to_string())])
+        );
     }
 
     #[test]
@@ -784,8 +1089,112 @@ mod tests {
         let store = Store::open(&path).unwrap();
         let tasks = store.unfinished_tasks().unwrap();
         assert_eq!(tasks.len(), 1);
-        assert!(!tasks[0].persist_result);
+        assert!(tasks[0].persist_result);
         assert!(tasks[0].upstream_job_ids.is_empty());
+        assert!(store.list_tasks(None).unwrap()[0].batch_id.is_none());
+    }
+
+    #[test]
+    fn opening_legacy_database_migrates_privacy_mode_to_save_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-settings.db");
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO settings(key, value) VALUES ('privacy_mode', '1');",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.get_setting("save_history").unwrap().as_deref(),
+            Some("0")
+        );
+        assert!(store.get_setting("privacy_mode").unwrap().is_none());
+    }
+
+    #[test]
+    fn opening_legacy_database_preserves_existing_persistent_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-results.db");
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE tasks(
+                   id TEXT PRIMARY KEY, created_at INTEGER NOT NULL,
+                   service TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                   input_path TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '{}',
+                   progress_page INTEGER NOT NULL DEFAULT 0,
+                   total_pages INTEGER NOT NULL DEFAULT 0,
+                   error_kind TEXT, error_msg TEXT);
+                 CREATE TABLE results(
+                   task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                   markdown TEXT NOT NULL, blocks_json TEXT NOT NULL, page_count INTEGER NOT NULL);
+                 INSERT INTO tasks(id, created_at, service, status, input_path)
+                 VALUES ('legacy-result', 1, 'vl16', 'done', 'capture.png');
+                 INSERT INTO results(task_id, markdown, blocks_json, page_count)
+                 VALUES ('legacy-result', 'kept', '[]', 0);",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let store = Store::open(&path).unwrap();
+        store.cleanup_previous_session_tasks().unwrap();
+
+        assert!(store.task("legacy-result").unwrap().is_some());
+        assert!(store.get_result("legacy-result").unwrap().is_some());
+        assert_eq!(store.retained_source_paths().unwrap(), vec!["capture.png"]);
+    }
+
+    #[test]
+    fn results_are_service_scoped_and_deletion_keeps_usage() {
+        let (_d, s) = tmp_store();
+        let today = Local::now().date_naive().to_string();
+        for (id, service, markdown) in [
+            ("vl-result", ServiceId::Vl16, "alpha vl text"),
+            ("ocr-result", ServiceId::PpOcrV6, "alpha ocr text"),
+        ] {
+            s.insert_task_in_batch(
+                &NewTask {
+                    id: id.into(),
+                    service,
+                    input_path: format!("{id}.png"),
+                    options_json: "{}".into(),
+                },
+                true,
+                Some("batch-1"),
+            )
+            .unwrap();
+            s.complete_task(
+                id,
+                &format!("{id}.png"),
+                &RecognitionResult {
+                    markdown: markdown.into(),
+                    page_count: 1,
+                    pages: vec![],
+                },
+                &today,
+                service,
+                true,
+            )
+            .unwrap();
+        }
+
+        let vl = s.list_results(ServiceId::Vl16, "alpha").unwrap();
+        assert_eq!(vl.len(), 1);
+        assert_eq!(vl[0].task_id, "vl-result");
+        assert_eq!(vl[0].service, ServiceId::Vl16);
+        assert!(!vl[0].temporary);
+
+        assert_eq!(
+            s.delete_result_task("vl-result").unwrap().as_deref(),
+            Some("vl-result.png")
+        );
+        assert!(s.get_result("vl-result").unwrap().is_none());
+        assert!(s.list_results(ServiceId::Vl16, "").unwrap().is_empty());
+        assert_eq!(s.usage_since(1).unwrap().len(), 2);
     }
 
     #[test]
@@ -801,12 +1210,15 @@ mod tests {
             error_kind: None,
             error_msg: None,
             created_at: 1,
+            batch_id: Some("batch-1".into()),
         };
-        let history = HistoryRow {
+        let history = ResultSummary {
             task_id: "t1".into(),
+            service: ServiceId::Vl16,
             file_name: "a.png".into(),
             snippet: "text".into(),
             created_at: 1,
+            temporary: false,
         };
         let usage = UsageRow {
             date: "2026-07-10".into(),
@@ -839,12 +1251,14 @@ mod tests {
             StdDuration::from_millis(1),
             true,
         );
-        queue.submit(NewTask {
-            id: "broken".into(),
-            service: ServiceId::Vl16,
-            input_path: "a.png".into(),
-            options_json: "{}".into(),
-        });
+        queue
+            .submit(NewTask {
+                id: "broken".into(),
+                service: ServiceId::Vl16,
+                input_path: "a.png".into(),
+                options_json: "{}".into(),
+            })
+            .unwrap();
         let error = timeout(StdDuration::from_secs(1), async {
             loop {
                 if let QueueEvent::Failed { error, .. } =

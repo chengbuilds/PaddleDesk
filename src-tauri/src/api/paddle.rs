@@ -15,6 +15,7 @@ use crate::model::{OcrError, RecognitionResult, ServiceId};
 pub(crate) const BASE_URL: &str = "https://paddleocr.aistudio-app.com";
 const JOBS_PATH: &str = "/api/v2/ocr/jobs";
 const SEGMENT_SIZE: usize = 100;
+const POLL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProxyConfig {
@@ -32,6 +33,7 @@ pub struct PaddleOcr {
     token: TokenProvider,
     proxy: ProxyProvider,
     poll_interval: Duration,
+    poll_timeout: Duration,
 }
 
 impl PaddleOcr {
@@ -42,6 +44,7 @@ impl PaddleOcr {
             token,
             proxy,
             poll_interval: Duration::from_secs(5),
+            poll_timeout: POLL_TIMEOUT,
         }
     }
 
@@ -52,6 +55,7 @@ impl PaddleOcr {
         proxy: ProxyProvider,
         base_url: String,
         poll_interval: Duration,
+        poll_timeout: Duration,
     ) -> Self {
         Self {
             service,
@@ -59,6 +63,7 @@ impl PaddleOcr {
             token,
             proxy,
             poll_interval,
+            poll_timeout,
         }
     }
 
@@ -119,19 +124,29 @@ impl PaddleOcr {
 
             let json_url = loop {
                 let id = job_id.as_deref().expect("job id set before polling");
-                match self
-                    .poll_until_done(&client, &token, id, completed_pages, total_pages, &progress)
-                    .await
+                match tokio::time::timeout(
+                    self.poll_timeout,
+                    self.poll_until_done(
+                        &client,
+                        &token,
+                        id,
+                        completed_pages,
+                        total_pages,
+                        &progress,
+                    ),
+                )
+                .await
                 {
-                    Ok(url) => break url,
-                    Err(PollError::Expired) => {
+                    Ok(Ok(url)) => break url,
+                    Ok(Err(PollError::Expired)) => {
                         let replacement = self
                             .submit(&client, &token, &input.path, segment.range.as_deref())
                             .await?;
                         save_job_id(&checkpoint, &mut job_ids, index, replacement.clone())?;
                         job_id = Some(replacement);
                     }
-                    Err(PollError::Ocr(error)) => return Err(error),
+                    Ok(Err(PollError::Ocr(error))) => return Err(error),
+                    Err(_) => return Err(OcrError::Server("upstream OCR job timed out".into())),
                 }
             };
 
@@ -634,6 +649,7 @@ mod tests {
             Arc::new(|| Ok(ProxyConfig::Direct)),
             server.uri(),
             Duration::from_millis(1),
+            POLL_TIMEOUT,
         );
         let checkpoint = ParseCheckpoint::empty();
         let observed = Arc::new(Mutex::new(Vec::new()));
@@ -727,6 +743,7 @@ mod tests {
             Arc::new(|| Ok(ProxyConfig::Direct)),
             server.uri(),
             Duration::from_millis(1),
+            POLL_TIMEOUT,
         );
         let checkpoint = ParseCheckpoint::new(vec!["expired".into()], Arc::new(|_| Ok(())));
         service
@@ -740,6 +757,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(checkpoint.job_ids().unwrap(), ["replacement"]);
+    }
+
+    #[tokio::test]
+    async fn pending_job_stops_at_total_poll_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("{JOBS_PATH}/pending")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "code": 0,
+                "data": { "state": "pending" }
+            })))
+            .mount(&server)
+            .await;
+
+        let service = PaddleOcr::with_endpoint(
+            ServiceId::PpOcrV6,
+            Arc::new(|| Ok("test-token".into())),
+            Arc::new(|| Ok(ProxyConfig::Direct)),
+            server.uri(),
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+        );
+        let result = service
+            .parse_resumable(
+                &InputDoc {
+                    path: "unused.png".into(),
+                },
+                &ParseOptions::default(),
+                Box::new(|_, _| {}),
+                ParseCheckpoint::new(vec!["pending".into()], Arc::new(|_| Ok(()))),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(OcrError::Server(message)) if message == "upstream OCR job timed out"
+        ));
     }
 
     #[tokio::test]

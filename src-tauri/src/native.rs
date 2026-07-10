@@ -11,6 +11,9 @@ pub(crate) struct NativeCopy {
     pub(crate) notification_title: &'static str,
     pub(crate) capture_done: &'static str,
     pub(crate) capture_failed: &'static str,
+    pub(crate) task_notification_title: &'static str,
+    pub(crate) task_done: &'static str,
+    pub(crate) task_failed: &'static str,
 }
 
 pub(crate) fn resolve_native_locale(setting: &str, system_locale: Option<&str>) -> NativeLocale {
@@ -40,6 +43,9 @@ pub(crate) fn native_copy(locale: NativeLocale) -> NativeCopy {
             notification_title: "PaddleDesk 截图识别",
             capture_done: "识别结果已复制到剪贴板",
             capture_failed: "截图识别失败",
+            task_notification_title: "PaddleDesk 识别任务",
+            task_done: "识别完成",
+            task_failed: "识别失败",
         },
         NativeLocale::En => NativeCopy {
             show: "Show PaddleDesk",
@@ -48,6 +54,9 @@ pub(crate) fn native_copy(locale: NativeLocale) -> NativeCopy {
             notification_title: "PaddleDesk screen recognition",
             capture_done: "Recognition result copied to the clipboard",
             capture_failed: "Screen recognition failed",
+            task_notification_title: "PaddleDesk recognition",
+            task_done: "Recognition complete",
+            task_failed: "Recognition failed",
         },
     }
 }

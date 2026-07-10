@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -10,12 +10,12 @@ use std::{
 
 use chrono::Local;
 use serde::Serialize;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, watch, Semaphore};
 
 use crate::{
     api::{InputDoc, OcrService, ParseCheckpoint, ParseOptions, ProgressFn},
     model::{OcrError, RecognitionResult, ServiceId},
-    storage::{AdmittedTask, NewTask, Store},
+    storage::{AdmittedTask, NewTask, Store, TaskRow},
 };
 
 const MAX_RETRIES: u32 = 3;
@@ -26,6 +26,9 @@ type TestProbe = (std::sync::mpsc::SyncSender<()>, Arc<std::sync::Barrier>);
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum QueueEvent {
+    Submitted {
+        task: TaskRow,
+    },
     Progress {
         id: String,
         stage: String,
@@ -52,7 +55,8 @@ pub struct Queue {
     events: mpsc::UnboundedSender<QueueEvent>,
     retry_base: Duration,
     persist_results: AtomicBool,
-    active: Mutex<HashSet<String>>,
+    active: Mutex<HashMap<String, watch::Sender<bool>>>,
+    session_results: Mutex<HashMap<String, RecognitionResult>>,
     #[cfg(test)]
     event_probe: Arc<Mutex<Option<TestProbe>>>,
     #[cfg(test)]
@@ -83,7 +87,8 @@ impl Queue {
             events,
             retry_base,
             persist_results: AtomicBool::new(persist_results),
-            active: Mutex::new(HashSet::new()),
+            active: Mutex::new(HashMap::new()),
+            session_results: Mutex::new(HashMap::new()),
             #[cfg(test)]
             event_probe: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -99,7 +104,15 @@ impl Queue {
         })
     }
 
-    pub fn submit(self: &Arc<Self>, task: NewTask) {
+    pub fn submit(self: &Arc<Self>, task: NewTask) -> Result<(), OcrError> {
+        self.submit_in_batch(task, None)
+    }
+
+    pub fn submit_in_batch(
+        self: &Arc<Self>,
+        task: NewTask,
+        batch_id: Option<&str>,
+    ) -> Result<(), OcrError> {
         #[cfg(test)]
         if matches!(
             self.store.try_lock(),
@@ -111,15 +124,21 @@ impl Queue {
             let store = match self.lock_store() {
                 Ok(store) => store,
                 Err(error) => {
-                    self.emit_failed(&task.id, error);
-                    return;
+                    self.emit_failed(&task.id, error.clone());
+                    return Err(error);
                 }
             };
             let persist_result = self.persist_results.load(Ordering::Acquire);
-            if let Err(error) = store.insert_task(&task, persist_result) {
-                self.emit_failed(&task.id, storage_error(error));
-                return;
+            if let Err(error) = store.insert_task_in_batch(&task, persist_result, batch_id) {
+                let error = storage_error(error);
+                self.emit_failed(&task.id, error.clone());
+                return Err(error);
             }
+            let submitted = store
+                .task(&task.id)
+                .map_err(storage_error)?
+                .ok_or_else(|| storage_error("submitted task missing from storage"))?;
+            self.emit(QueueEvent::Submitted { task: submitted });
             persist_result
         };
         self.spawn(AdmittedTask {
@@ -127,6 +146,7 @@ impl Queue {
             persist_result,
             upstream_job_ids: Vec::new(),
         });
+        Ok(())
     }
 
     pub fn set_persist_results(&self, persist_results: bool) {
@@ -154,7 +174,7 @@ impl Queue {
         let tasks = store.unfinished_tasks().map_err(storage_error)?;
         Ok(tasks
             .into_iter()
-            .filter(|task| active.insert(task.task.id.clone()))
+            .filter(|task| register(&mut active, &task.task.id))
             .collect())
     }
 
@@ -166,7 +186,7 @@ impl Queue {
         ) {
             hit_probe(&self.cancel_probe);
         }
-        let _active = match self.active.lock() {
+        let active = match self.active.lock() {
             Ok(active) => active,
             Err(_) => {
                 self.emit_failed(id, storage_error("queue state lock poisoned"));
@@ -176,6 +196,9 @@ impl Queue {
         let error = match self.lock_store() {
             Ok(store) => match store.cancel_task(id) {
                 Ok(true) => {
+                    if let Some(cancel) = active.get(id) {
+                        cancel.send_replace(true);
+                    }
                     self.emit(QueueEvent::Canceled { id: id.into() });
                     return;
                 }
@@ -200,7 +223,7 @@ impl Queue {
                 .active
                 .lock()
                 .map_err(|_| storage_error("queue state lock poisoned"))?;
-            if !active.insert(id.into()) {
+            if !register(&mut active, id) {
                 return Err(OcrError::Parse("task is already active".into()));
             }
             let retried = self
@@ -228,7 +251,7 @@ impl Queue {
         let registered = self
             .active
             .lock()
-            .map(|mut active| active.insert(task.task.id.clone()));
+            .map(|mut active| register(&mut active, &task.task.id));
         match registered {
             Ok(true) => {}
             Ok(false) => return,
@@ -246,12 +269,52 @@ impl Queue {
     }
 
     async fn run(self: Arc<Self>, task: AdmittedTask) {
-        let terminal = self.work(&task).await;
+        let terminal = match self.cancel_receiver(&task.task.id) {
+            Ok(mut cancel) => self.work(&task, &mut cancel).await,
+            Err(error) => self.fail(&task.task.id, error),
+        };
         self.finalize(&task.task.id, terminal);
     }
 
-    async fn work(&self, task: &AdmittedTask) -> Option<QueueEvent> {
-        let Ok(_permit) = self.semaphore.acquire().await else {
+    pub fn get_result(&self, id: &str) -> Result<Option<RecognitionResult>, OcrError> {
+        if let Some(result) = self.lock_store()?.get_result(id).map_err(storage_error)? {
+            return Ok(Some(result));
+        }
+        self.session_results
+            .lock()
+            .map_err(|_| storage_error("session result cache lock poisoned"))
+            .map(|results| results.get(id).cloned())
+    }
+
+    pub fn session_results(&self) -> Result<Vec<(String, RecognitionResult)>, OcrError> {
+        self.session_results
+            .lock()
+            .map_err(|_| storage_error("session result cache lock poisoned"))
+            .map(|results| {
+                results
+                    .iter()
+                    .map(|(id, result)| (id.clone(), result.clone()))
+                    .collect()
+            })
+    }
+
+    pub fn remove_session_result(&self, id: &str) -> Result<bool, OcrError> {
+        self.session_results
+            .lock()
+            .map_err(|_| storage_error("session result cache lock poisoned"))
+            .map(|mut results| results.remove(id).is_some())
+    }
+
+    async fn work(
+        &self,
+        task: &AdmittedTask,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Option<QueueEvent> {
+        let permit = tokio::select! {
+            _ = canceled(cancel) => return None,
+            permit = self.semaphore.acquire() => permit,
+        };
+        let Ok(_permit) = permit else {
             return self.fail(&task.task.id, OcrError::Parse("queue stopped".into()));
         };
         match self.progress(&task.task.id, "uploading", 0, 0) {
@@ -259,7 +322,11 @@ impl Queue {
             Ok(false) => return None,
             Err(error) => return self.fail(&task.task.id, error),
         }
-        match self.parse_with_retry(task).await {
+        let result = tokio::select! {
+            _ = canceled(cancel) => return None,
+            result = self.parse_with_retry(task) => result,
+        };
+        match result {
             Ok(result) => self.finish(task, result),
             Err(error) => self.fail(&task.task.id, error),
         }
@@ -383,10 +450,21 @@ impl Queue {
                     task.persist_result,
                 ) {
                     Ok(true) => {
+                        if !task.persist_result {
+                            let cached = self.session_results.lock().map(|mut results| {
+                                results.insert(task.task.id.clone(), result.clone());
+                            });
+                            if cached.is_err() {
+                                return self.fail(
+                                    &task.task.id,
+                                    storage_error("session result cache lock poisoned"),
+                                );
+                            }
+                        }
                         return Some(QueueEvent::Done {
                             id: task.task.id.clone(),
                             result,
-                        })
+                        });
                     }
                     Ok(false) => return None,
                     Err(error) => storage_error(error),
@@ -447,11 +525,40 @@ impl Queue {
             .map_err(|_| storage_error("store lock poisoned"))
     }
 
+    fn cancel_receiver(&self, id: &str) -> Result<watch::Receiver<bool>, OcrError> {
+        self.active
+            .lock()
+            .map_err(|_| storage_error("queue state lock poisoned"))?
+            .get(id)
+            .map(watch::Sender::subscribe)
+            .ok_or_else(|| OcrError::Parse("task is not active".into()))
+    }
+
     fn emit_failed(&self, id: &str, error: OcrError) {
         self.emit(QueueEvent::Failed {
             id: id.into(),
             error,
         });
+    }
+}
+
+fn register(active: &mut HashMap<String, watch::Sender<bool>>, id: &str) -> bool {
+    if active.contains_key(id) {
+        return false;
+    }
+    let (cancel, _) = watch::channel(false);
+    active.insert(id.into(), cancel);
+    true
+}
+
+async fn canceled(cancel: &mut watch::Receiver<bool>) {
+    if *cancel.borrow() {
+        return;
+    }
+    while cancel.changed().await.is_ok() {
+        if *cancel.borrow() {
+            return;
+        }
     }
 }
 
